@@ -1,0 +1,21 @@
+Staff Timesheet — VERSION 1  (2026-06-27)
+
+Separate staff app. Same weekly timesheet UI as the contractor app, but staff
+sign in with their Microsoft 365 account (no code). Their hours write to the SAME
+Timesheets SharePoint list, keyed by their 365 account id, so contractor + staff
+hours sit together.
+
+NO new SharePoint changes needed (reuses Timesheets + the ContractorId column,
+Sites, and Settings from the contractor app).
+
+Setup (see README.md):
+  1. New app registration "Staff Timesheet" (SPA, single-tenant) — gives a client id.
+  2. New Netlify site from a new GitHub repo (Git deploy installs the 'jose' dep).
+  3. Set the redirect URI on the registration to the Netlify site URL.
+  4. Paste the client id into config.js (front-end) AND set env vars on Netlify.
+
+Env vars (Netlify, staff site):
+  TENANT_ID, CLIENT_ID, CLIENT_SECRET, SP_SITE_ID, LIST_ID   (app-only — SharePoint writes)
+  STAFF_CLIENT_ID                                            (the staff registration's client id)
+
+After deploy the sign-in screen reads "Version 1".
