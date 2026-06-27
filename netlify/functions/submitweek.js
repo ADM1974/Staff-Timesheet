@@ -1,7 +1,7 @@
 // Saves the signed-in staff member's whole week — REPLACES their rows for the
 // open week (delete + rewrite). Week boundary is the home site's; hours are per
 // the day's chosen site; allowances are validated against that day's site.
-const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, weekContext, getUserEntries, createItem, deleteItem } = require('./staff');
+const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, weekContext, getUserEntries, getRejectedWeek, createItem, deleteItem } = require('./staff');
 
 exports.handler = async (event) => {
   const headers = { 'Content-Type': 'application/json' };
@@ -19,7 +19,10 @@ exports.handler = async (event) => {
     const homeSite = await getHomeSite(token, user.email, sitesMap);
     const closeDayIdx = (sitesMap.byName[String(homeSite || '').toLowerCase()] || {}).closeDayIndex || 0;
     const wk = weekContext(closeDayIdx);
-    const open = new Set(wk.days);
+    const rejected = await getRejectedWeek(token, user.id, closeDayIdx);
+    const submittedDates = (Array.isArray(data.days) ? data.days : []).map(d => String(d.date || '').slice(0, 10));
+    const target = (rejected && submittedDates.some(d => rejected.days.includes(d))) ? rejected : wk;  // re-submitting a sent-back week, or the open week
+    const open = new Set(target.days);
     const activeSites = new Set(await getActiveSites(token));
     const allowancesBySite = await getAllowancesBySite(token, sitesMap);
     const weeklySet = new Set(((allowancesBySite[homeSite] || {}).weekly) || []);
@@ -45,10 +48,10 @@ exports.handler = async (event) => {
       .map(a => String(a || '').trim())
       .filter(a => weeklySet.has(a));             // weekly allowances = the home site's
 
-    const existing = await getUserEntries(token, user.id, wk.weekStart, wk.weekEnd);
+    const existing = await getUserEntries(token, user.id, target.weekStart, target.weekEnd);
     for (const it of existing) await deleteItem(token, it.id);
 
-    const batchId = 'S-' + wk.weekStart + '-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+    const batchId = 'S-' + target.weekStart + '-' + Math.random().toString(36).slice(2, 8).toUpperCase();
     let created = 0;
     for (const day of clean) {
       for (const l of day.lines) {
@@ -70,7 +73,7 @@ exports.handler = async (event) => {
     }
     for (const a of weekAllowances) {
       await createItem(token, {
-        Title: user.name, ContractorId: user.id, EntryDate: wk.weekStart + 'T00:00:00Z',
+        Title: user.name, ContractorId: user.id, EntryDate: target.weekStart + 'T00:00:00Z',
         Site: homeSite, RowType: 'Allowance', Allowance: a, Hours: 0, Status: 'Submitted', BatchID: batchId,
         Notes: 'Staff app weekly allowance · ' + user.email,
       });

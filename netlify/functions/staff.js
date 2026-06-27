@@ -209,6 +209,39 @@ async function getUserEntries(token, userKey, weekStart, weekEnd) {
   });
 }
 
+// The pay week (7 ISO days, ending on closeDayIdx) that CONTAINS dateStr.
+function weekFor(dateStr, closeDayIdx) {
+  const [y, m, d] = String(dateStr).slice(0, 10).split('-').map(Number);
+  const base = Date.UTC(y, m - 1, d);
+  const dow = new Date(base).getUTCDay();
+  const end = base + ((closeDayIdx - dow + 7) % 7) * 86400000;
+  const days = [];
+  for (let i = 6; i >= 0; i--) days.push(_iso(end - i * 86400000));
+  return { weekStart: days[0], weekEnd: days[6], days };
+}
+
+// If the staff member has a REJECTED week, return it (so they can fix + re-submit
+// even after that week closed). Most recent rejected week wins. null if none.
+async function getRejectedWeek(token, userKey, closeDayIdx) {
+  if (!userKey) return null;
+  const url = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}/lists/${process.env.LIST_ID}/items?expand=fields&$top=999&$filter=fields/ContractorId eq '${userKey}'`;
+  const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token, Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' } });
+  if (!r.ok) return null;
+  const rejected = ((await r.json()).value || []).filter(it => String((it.fields || {}).Status || '') === 'Rejected');
+  if (!rejected.length) return null;
+  let latest = '';
+  for (const it of rejected) { const dd = String((it.fields || {}).EntryDate || '').slice(0, 10); if (dd > latest) latest = dd; }
+  if (!latest) return null;
+  const wk = weekFor(latest, closeDayIdx);
+  let reason = '';
+  for (const it of rejected) {
+    const f = it.fields || {};
+    const dd = String(f.EntryDate || '').slice(0, 10);
+    if (dd >= wk.weekStart && dd <= wk.weekEnd && f.RejectionReason) { reason = String(f.RejectionReason).trim(); break; }
+  }
+  return { ...wk, reason };
+}
+
 const itemsUrl = () => `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}/lists/${process.env.LIST_ID}/items`;
 async function createItem(token, fields) {
   const r = await fetch(itemsUrl(), { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ fields }) });
@@ -236,5 +269,6 @@ exports.getAllowancesBySite = getAllowancesBySite;
 exports.getWorkOrders = getWorkOrders;
 exports.weekContext = weekContext;
 exports.getUserEntries = getUserEntries;
+exports.getRejectedWeek = getRejectedWeek;
 exports.createItem = createItem;
 exports.deleteItem = deleteItem;

@@ -1,6 +1,6 @@
 // Returns the signed-in staff member's current open week + what they've entered.
 // The week is driven by their HOME site's close day (Workers list, by email).
-const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, weekContext, getUserEntries, getWorkOrders } = require('./staff');
+const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, weekContext, getUserEntries, getWorkOrders, getRejectedWeek } = require('./staff');
 
 exports.handler = async (event) => {
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
@@ -15,11 +15,13 @@ exports.handler = async (event) => {
     const closeDayIdx = homeInfo.closeDayIndex || 0;
     const workOrders = await getWorkOrders(token, homeInfo.id, homeSite);   // typeahead for the home site
     const wk = weekContext(closeDayIdx);
+    const rejected = await getRejectedWeek(token, user.id, closeDayIdx);    // a sent-back week to fix?
+    const active = rejected ? { ...rejected, closeDayName: wk.closeDayName } : wk;  // edit that week, else the open week
     const sites = await getActiveSites(token);
     const allowancesBySite = await getAllowancesBySite(token, sitesMap);   // {site:{daily,weekly}}
     const weeklyOptions = ((allowancesBySite[homeSite] || {}).weekly) || []; // staff weekly = home site
     const weeklySet = new Set(weeklyOptions);
-    const entries = await getUserEntries(token, user.id, wk.weekStart, wk.weekEnd);
+    const entries = await getUserEntries(token, user.id, active.weekStart, active.weekEnd);
 
     // group existing rows → per-day site/hours/daily-allowances + week-level weekly allowances
     const byDate = {};
@@ -39,14 +41,14 @@ exports.handler = async (event) => {
         dd.lines.push({ wo: String(f.WorkOrder || ''), hr: Number(f.Hours) || 0 });
       }
     }
-    const days = wk.days.map(date => ({
+    const days = active.days.map(date => ({
       date,
       site: (byDate[date] && byDate[date].site) || '',
       lines: (byDate[date] && byDate[date].lines) || [],
       allowances: (byDate[date] && byDate[date].allowances) || [],
     }));
 
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, name: user.name, homeSite, closeDayName: wk.closeDayName, weekStart: wk.weekStart, weekEnd: wk.weekEnd, sites, allowancesBySite, weeklyOptions, workOrders, weekAllowances, days }) };
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, name: user.name, homeSite, closeDayName: wk.closeDayName, weekStart: active.weekStart, weekEnd: active.weekEnd, sites, allowancesBySite, weeklyOptions, workOrders, weekAllowances, days, rejected: !!rejected, rejectionReason: rejected ? rejected.reason : '' }) };
   } catch (err) {
     console.error(err);
     return { statusCode: 502, headers, body: '{"ok":false,"error":"server"}' };

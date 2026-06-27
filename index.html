@@ -172,6 +172,7 @@ async function loadWeek(){
     WEEKLY_OPTIONS=data.weeklyOptions||[];
     WEEK_ALLOWANCES=(data.weekAllowances||[]).slice();
     WEEK={ weekStart:data.weekStart, weekEnd:data.weekEnd, closeDayName:data.closeDayName, homeSite:data.homeSite||'',
+      rejected:!!data.rejected, rejectionReason:data.rejectionReason||'',
       days:(data.days||[]).map(d=>({ date:d.date, site:d.site||data.homeSite||'',
         lines:(d.lines||[]).map(l=>({wo:String(l.wo||''),hr:(l.hr!=null?String(l.hr):'')})),
         allowances:(d.allowances||[]).slice() })) };
@@ -193,11 +194,15 @@ function lineHtml(di,li,l){
     </div></div>`;
 }
 function renderWeek(){
+  const rejectBanner = WEEK.rejected
+    ? `<div style="background:#fdeceb;border:1px solid #f0a9a4;color:#8a1a14;border-radius:9px;padding:9px 12px;font-size:13px;font-weight:600;margin-bottom:10px">⚠️ This week was sent back${WEEK.rejectionReason?': “'+esc(WEEK.rejectionReason)+'”':''}. Please fix it and submit again.</div>`
+    : '';
   document.getElementById('weekHead').innerHTML=
+    rejectBanner+
     `<div class="sh">Hi ${esc(firstName(userName))} — your timesheet</div>
      <div class="rng">${dayLabel(WEEK.weekStart)} – ${dayLabel(WEEK.weekEnd)}</div>
      <div class="diag" style="font-size:11px;color:#8a8f98;margin-top:2px">${esc(userEmail||'?')} · home site: ${WEEK.homeSite?esc(WEEK.homeSite):'— not found in Workers list'}</div>
-     <div class="close">Open until ${esc(WEEK.closeDayName)} — re-enter any time to change it.</div>`;
+     <div class="close">${WEEK.rejected?'Fix this week and tap Submit to send it back for approval.':'Open until '+esc(WEEK.closeDayName)+' — re-enter any time to change it.'}</div>`;
   document.getElementById('days').innerHTML=weekAllowHtml()+WEEK.days.map((d,di)=>{
     const tot=d.lines.reduce((s,l)=>s+(parseFloat(l.hr)||0),0).toFixed(1);
     return `<div class="day">
@@ -256,7 +261,7 @@ async function submitWeek(){
 }
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='11';
+const APP_VERSION='12';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
