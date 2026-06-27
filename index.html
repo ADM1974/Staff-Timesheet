@@ -112,7 +112,7 @@ const WORKORDERS = [
   "WO-10241 — Riverside fitout","WO-10238 — Northgate roof","WO-10255 — Depot electrical",
   "WO-10199 — Harbour maintenance","WO-10260 — Riverside snagging"
 ];
-let msalInstance=null, account=null, WEEK=null, SITES=[], ALLOWANCES_BY_SITE={}, WEEKLY_OPTIONS=[], WEEK_ALLOWANCES=[], userName='there';
+let msalInstance=null, account=null, WEEK=null, SITES=[], ALLOWANCES_BY_SITE={}, WEEKLY_OPTIONS=[], WEEK_ALLOWANCES=[], userName='there', userEmail='';
 const SCOPES=['openid','profile','email'];
 
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2800);}
@@ -154,6 +154,7 @@ async function api(path, body){
 
 function afterSignIn(){
   userName=(account && (account.name || (account.idTokenClaims && account.idTokenClaims.name))) || 'there';
+  userEmail=(account && (account.username || (account.idTokenClaims && account.idTokenClaims.preferred_username))) || '';
   document.getElementById('gateBody').classList.add('hidden');
   document.getElementById('weekView').classList.remove('hidden');
   const chip=document.getElementById('who'); chip.classList.remove('hidden'); chip.textContent=firstName(userName)+' · Sign out';
@@ -172,7 +173,7 @@ async function loadWeek(){
     ALLOWANCES_BY_SITE=data.allowancesBySite||{};
     WEEKLY_OPTIONS=data.weeklyOptions||[];
     WEEK_ALLOWANCES=(data.weekAllowances||[]).slice();
-    WEEK={ weekStart:data.weekStart, weekEnd:data.weekEnd, closeDayName:data.closeDayName,
+    WEEK={ weekStart:data.weekStart, weekEnd:data.weekEnd, closeDayName:data.closeDayName, homeSite:data.homeSite||'',
       days:(data.days||[]).map(d=>({ date:d.date, site:d.site||data.homeSite||'',
         lines:(d.lines||[]).map(l=>({wo:String(l.wo||''),hr:(l.hr!=null?String(l.hr):'')})),
         allowances:(d.allowances||[]).slice() })) };
@@ -197,6 +198,7 @@ function renderWeek(){
   document.getElementById('weekHead').innerHTML=
     `<div class="sh">Hi ${esc(firstName(userName))} — your timesheet</div>
      <div class="rng">${dayLabel(WEEK.weekStart)} – ${dayLabel(WEEK.weekEnd)}</div>
+     <div class="diag" style="font-size:11px;color:#8a8f98;margin-top:2px">${esc(userEmail||'?')} · home site: ${WEEK.homeSite?esc(WEEK.homeSite):'— not found in Workers list'}</div>
      <div class="close">Open until ${esc(WEEK.closeDayName)} — re-enter any time to change it.</div>`;
   document.getElementById('days').innerHTML=weekAllowHtml()+WEEK.days.map((d,di)=>{
     const tot=d.lines.reduce((s,l)=>s+(parseFloat(l.hr)||0),0).toFixed(1);
@@ -258,7 +260,7 @@ async function submitWeek(){
 }
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='6';
+const APP_VERSION='7';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
