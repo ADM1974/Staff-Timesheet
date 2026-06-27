@@ -89,8 +89,19 @@ async function getSitesMap(token) {
   return { byName, byId };
 }
 
-// The staff member's HOME site name, from the Workers list matched by Email.
-// HomeSite may be a Lookup (resolved via the sites map) or plain text/choice.
+// Generate the company email from a worker's name: first-initial.surname@ael.co
+// (so the Workers list only needs a name + a site — no Email column required).
+function emailFromName(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return '';
+  const first = parts[0].replace(/[^a-z]/gi, '').charAt(0).toLowerCase();
+  const last = parts[parts.length - 1].replace(/[^a-z0-9-]/gi, '').toLowerCase();
+  return (first && last) ? `${first}.${last}@ael.co` : '';
+}
+
+// The staff member's HOME site name, from the Workers list. A row matches the
+// signed-in email by EITHER an explicit "Email" column OR the email generated from
+// the worker's name (Title). Site may be plain text/choice or a Lookup.
 async function getHomeSite(token, email, sitesMap) {
   const want = String(email || '').trim().toLowerCase();
   if (!want) return '';
@@ -103,7 +114,9 @@ async function getHomeSite(token, email, sitesMap) {
   if (!r.ok) return '';
   for (const it of ((await r.json()).value || [])) {
     const f = it.fields || {};
-    if (String(f.Email || '').trim().toLowerCase() !== want) continue;
+    const rowEmail = String(f.Email || '').trim().toLowerCase();
+    const genEmail = emailFromName(f.Title);                    // derive from the worker's name
+    if (rowEmail !== want && genEmail !== want) continue;       // explicit Email OR generated
     let hs = String(f.HomeSite || f.Site || '').trim();                 // text/choice (HomeSite or Site)
     if (!hs) {
       const lid = f.HomeSiteLookupId != null ? f.HomeSiteLookupId : f.SiteLookupId;  // lookup column
