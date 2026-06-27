@@ -1,6 +1,6 @@
 // Returns the signed-in staff member's current open week + what they've entered.
 // The week is driven by their HOME site's close day (Workers list, by email).
-const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, weekContext, getUserEntries } = require('./staff');
+const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, weekContext, getUserEntries, getWorkOrders } = require('./staff');
 
 exports.handler = async (event) => {
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
@@ -11,7 +11,9 @@ exports.handler = async (event) => {
     const token = await getAppToken();
     const sitesMap = await getSitesMap(token);
     const homeSite = await getHomeSite(token, user.email, sitesMap);
-    const closeDayIdx = (sitesMap.byName[String(homeSite || '').toLowerCase()] || {}).closeDayIndex || 0;
+    const homeInfo = sitesMap.byName[String(homeSite || '').toLowerCase()] || {};
+    const closeDayIdx = homeInfo.closeDayIndex || 0;
+    const workOrders = await getWorkOrders(token, homeInfo.id, homeSite);   // typeahead for the home site
     const wk = weekContext(closeDayIdx);
     const sites = await getActiveSites(token);
     const allowancesBySite = await getAllowancesBySite(token, sitesMap);   // {site:{daily,weekly}}
@@ -44,7 +46,7 @@ exports.handler = async (event) => {
       allowances: (byDate[date] && byDate[date].allowances) || [],
     }));
 
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, name: user.name, homeSite, closeDayName: wk.closeDayName, weekStart: wk.weekStart, weekEnd: wk.weekEnd, sites, allowancesBySite, weeklyOptions, weekAllowances, days }) };
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, name: user.name, homeSite, closeDayName: wk.closeDayName, weekStart: wk.weekStart, weekEnd: wk.weekEnd, sites, allowancesBySite, weeklyOptions, workOrders, weekAllowances, days }) };
   } catch (err) {
     console.error(err);
     return { statusCode: 502, headers, body: '{"ok":false,"error":"server"}' };

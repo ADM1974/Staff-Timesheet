@@ -150,6 +150,31 @@ async function getAllowancesBySite(token, sitesMap) {
   return out;
 }
 
+// Active work orders for a site, from the "WorkOrders" list (Site = lookup or text).
+// Returns [] if there's no list yet, so the typeahead simply has no suggestions.
+async function getWorkOrders(token, siteId, siteName) {
+  const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
+  let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) return [];
+  const list = ((await r.json()).value || []).find(l => String(l.displayName || '').toLowerCase().replace(/\s+/g, '') === 'workorders');
+  if (!list) return [];
+  r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) return [];
+  const wantId = siteId != null ? String(siteId) : '';
+  const wantName = String(siteName || '').trim().toLowerCase();
+  return ((await r.json()).value || [])
+    .filter(it => {
+      const f = it.fields || {};
+      if (f.Active === false) return false;
+      const byId = wantId && String(f.SiteLookupId != null ? f.SiteLookupId : '') === wantId;
+      const byName = wantName && String(f.Site || '').trim().toLowerCase() === wantName;
+      return byId || byName;
+    })
+    .map(it => String((it.fields || {}).Title || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+}
+
 function nzDateInfo() {
   const s = new Intl.DateTimeFormat('en-CA', { timeZone: 'Pacific/Auckland', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const [y, m, d] = s.split('-').map(Number);
@@ -208,6 +233,7 @@ exports.getActiveSites = getActiveSites;
 exports.getSitesMap = getSitesMap;
 exports.getHomeSite = getHomeSite;
 exports.getAllowancesBySite = getAllowancesBySite;
+exports.getWorkOrders = getWorkOrders;
 exports.weekContext = weekContext;
 exports.getUserEntries = getUserEntries;
 exports.createItem = createItem;

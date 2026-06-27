@@ -108,10 +108,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.27.0/lib/msal-browser.min.js"></script>
 <script src="config.js"></script>
 <script>
-const WORKORDERS = [
-  "WO-10241 — Riverside fitout","WO-10238 — Northgate roof","WO-10255 — Depot electrical",
-  "WO-10199 — Harbour maintenance","WO-10260 — Riverside snagging"
-];
+let WORKORDERS = [];   // per-site, loaded from the WorkOrders SharePoint list on each week load
 let msalInstance=null, account=null, WEEK=null, SITES=[], ALLOWANCES_BY_SITE={}, WEEKLY_OPTIONS=[], WEEK_ALLOWANCES=[], userName='there', userEmail='';
 const SCOPES=['openid','profile','email'];
 
@@ -171,6 +168,7 @@ async function loadWeek(){
     if(!data.ok) throw new Error('load');
     SITES=data.sites||[];
     ALLOWANCES_BY_SITE=data.allowancesBySite||{};
+    WORKORDERS=data.workOrders||[];
     WEEKLY_OPTIONS=data.weeklyOptions||[];
     WEEK_ALLOWANCES=(data.weekAllowances||[]).slice();
     WEEK={ weekStart:data.weekStart, weekEnd:data.weekEnd, closeDayName:data.closeDayName, homeSite:data.homeSite||'',
@@ -258,7 +256,7 @@ async function submitWeek(){
 }
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='10';
+const APP_VERSION='11';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
