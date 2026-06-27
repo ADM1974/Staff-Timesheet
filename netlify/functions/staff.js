@@ -104,8 +104,11 @@ async function getHomeSite(token, email, sitesMap) {
   for (const it of ((await r.json()).value || [])) {
     const f = it.fields || {};
     if (String(f.Email || '').trim().toLowerCase() !== want) continue;
-    let hs = String(f.HomeSite || '').trim();
-    if (!hs && f.HomeSiteLookupId != null) hs = sitesMap.byId[String(f.HomeSiteLookupId)] || '';
+    let hs = String(f.HomeSite || f.Site || '').trim();                 // text/choice (HomeSite or Site)
+    if (!hs) {
+      const lid = f.HomeSiteLookupId != null ? f.HomeSiteLookupId : f.SiteLookupId;  // lookup column
+      if (lid != null) hs = sitesMap.byId[String(lid)] || '';
+    }
     return hs;
   }
   return '';
