@@ -68,17 +68,69 @@ async function getActiveSites(token) {
     .filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 
-async function getCloseDayIndex(token) {
+// Sites list → { byName: {lowerName:{id,name,closeDayIndex}}, byId: {id:name} }.
+async function getSitesMap(token) {
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
   let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) throw new Error('graph lists ' + r.status + ' ' + (await r.text()));
-  const list = ((await r.json()).value || []).find(l => String(l.displayName || '').toLowerCase() === 'settings');
-  if (!list) return 0;
-  r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=1`, { headers: { Authorization: 'Bearer ' + token } });
+  const list = ((await r.json()).value || []).find(l => String(l.displayName || '').toLowerCase() === 'sites');
+  if (!list) throw new Error('Sites list not found');
+  r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) throw new Error('graph items ' + r.status + ' ' + (await r.text()));
-  const item = ((await r.json()).value || [])[0];
-  const idx = WEEKDAYS.findIndex(d => d.toLowerCase() === String(item && item.fields && item.fields.CloseDay || '').trim().toLowerCase());
-  return idx < 0 ? 0 : idx;
+  const byName = {}, byId = {};
+  for (const it of ((await r.json()).value || [])) {
+    const f = it.fields || {};
+    const name = String(f.Title || '').trim();
+    if (!name) continue;
+    const idx = WEEKDAYS.findIndex(d => d.toLowerCase() === String(f.CloseDay || '').trim().toLowerCase());
+    byName[name.toLowerCase()] = { id: it.id, name, closeDayIndex: idx < 0 ? 0 : idx };
+    byId[String(it.id)] = name;
+  }
+  return { byName, byId };
+}
+
+// The staff member's HOME site name, from the Workers list matched by Email.
+// HomeSite may be a Lookup (resolved via the sites map) or plain text/choice.
+async function getHomeSite(token, email, sitesMap) {
+  const want = String(email || '').trim().toLowerCase();
+  if (!want) return '';
+  const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
+  let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) return '';
+  const list = ((await r.json()).value || []).find(l => String(l.displayName || '').toLowerCase() === 'workers');
+  if (!list) return '';
+  r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) return '';
+  for (const it of ((await r.json()).value || [])) {
+    const f = it.fields || {};
+    if (String(f.Email || '').trim().toLowerCase() !== want) continue;
+    let hs = String(f.HomeSite || '').trim();
+    if (!hs && f.HomeSiteLookupId != null) hs = sitesMap.byId[String(f.HomeSiteLookupId)] || '';
+    return hs;
+  }
+  return '';
+}
+
+// All active allowances grouped by site name → [allowance titles].
+async function getAllowancesBySite(token, sitesMap) {
+  const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
+  let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) return {};
+  const list = ((await r.json()).value || []).find(l => String(l.displayName || '').toLowerCase() === 'allowances');
+  if (!list) return {};
+  r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) return {};
+  const out = {};
+  for (const it of ((await r.json()).value || [])) {
+    const f = it.fields || {};
+    if (f.Active === false) continue;
+    const siteName = f.SiteLookupId != null ? sitesMap.byId[String(f.SiteLookupId)] : '';
+    const title = String(f.Title || '').trim();
+    if (!siteName || !title) continue;
+    (out[siteName] = out[siteName] || []).push(title);
+  }
+  for (const k in out) out[k].sort((a, b) => a.localeCompare(b));
+  return out;
 }
 
 function nzDateInfo() {
@@ -98,9 +150,9 @@ function computeOpenWeek(closeDayIdx) {
   return { weekStart: days[0], weekEnd: days[6], days };
 }
 
-async function getWeekContext(token) {
-  const idx = await getCloseDayIndex(token);
-  return { ...computeOpenWeek(idx), closeDayName: WEEKDAYS[idx] };
+// Build the open-week context from a close-day index (computed from the home site).
+function weekContext(closeDayIdx) {
+  return { ...computeOpenWeek(closeDayIdx), closeDayName: WEEKDAYS[closeDayIdx] };
 }
 
 // A user's Timesheets rows within [weekStart,weekEnd], by the ContractorId key
@@ -136,7 +188,10 @@ exports.handler = async (event) => {
 exports.getAppToken = getAppToken;
 exports.validateStaffToken = validateStaffToken;
 exports.getActiveSites = getActiveSites;
-exports.getWeekContext = getWeekContext;
+exports.getSitesMap = getSitesMap;
+exports.getHomeSite = getHomeSite;
+exports.getAllowancesBySite = getAllowancesBySite;
+exports.weekContext = weekContext;
 exports.getUserEntries = getUserEntries;
 exports.createItem = createItem;
 exports.deleteItem = deleteItem;

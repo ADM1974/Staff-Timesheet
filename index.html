@@ -64,6 +64,10 @@
   .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 28px);background:#1f2329;color:#fff;padding:11px 18px;border-radius:24px;font-size:13.5px;opacity:0;transition:opacity .25s;pointer-events:none;text-align:center;max-width:320px;z-index:30;}
   .toast.show{opacity:.96;}
   .verbadge{position:fixed;left:8px;bottom:8px;z-index:40;background:rgba(31,35,41,.5);color:#fff;font-size:10px;line-height:1;padding:4px 7px;border-radius:10px;letter-spacing:.3px;pointer-events:none;}
+  .allow{margin-top:10px;padding-top:9px;border-top:1px dashed var(--line);}
+  .allow-h{font-size:10px;font-weight:700;letter-spacing:.4px;color:var(--muted);text-transform:uppercase;margin-bottom:4px;}
+  .achk{display:flex;align-items:center;gap:9px;font-size:14px;padding:6px 0;color:var(--ink);cursor:pointer;}
+  .achk input{width:18px;height:18px;flex:0 0 auto;margin:0;}
   .hidden{display:none !important;}
 </style>
 </head>
@@ -95,7 +99,7 @@
     <div class="totbar"><span>Week total</span><b id="weekTotal">0.0 h</b></div>
     <input class="hp" tabindex="-1" autocomplete="off" id="company">
     <button type="button" class="btn" id="submit" onclick="submitWeek()">Submit week</button>
-    <div class="foot" style="text-align:center;color:var(--muted);font-size:11px;margin-top:12px">You can change this week's hours any time until it closes.</div>
+    <div class="foot" id="closeFoot" style="text-align:center;color:var(--muted);font-size:11px;margin-top:12px">You can change this week's hours until it closes.</div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -108,7 +112,7 @@ const WORKORDERS = [
   "WO-10241 — Riverside fitout","WO-10238 — Northgate roof","WO-10255 — Depot electrical",
   "WO-10199 — Harbour maintenance","WO-10260 — Riverside snagging"
 ];
-let msalInstance=null, account=null, WEEK=null, SITES=[], userName='there';
+let msalInstance=null, account=null, WEEK=null, SITES=[], ALLOWANCES_BY_SITE={}, userName='there';
 const SCOPES=['openid','profile','email'];
 
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2800);}
@@ -165,9 +169,11 @@ async function loadWeek(){
     const data=await res.json();
     if(!data.ok) throw new Error('load');
     SITES=data.sites||[];
+    ALLOWANCES_BY_SITE=data.allowancesBySite||{};
     WEEK={ weekStart:data.weekStart, weekEnd:data.weekEnd, closeDayName:data.closeDayName,
       days:(data.days||[]).map(d=>({ date:d.date, site:d.site||'',
-        lines:(d.lines||[]).map(l=>({wo:String(l.wo||''),hr:(l.hr!=null?String(l.hr):'')})) })) };
+        lines:(d.lines||[]).map(l=>({wo:String(l.wo||''),hr:(l.hr!=null?String(l.hr):'')})),
+        allowances:(d.allowances||[]).slice() })) };
     renderWeek();
   }catch(e){ document.getElementById('days').innerHTML='<div class="loading">Couldn’t load your week — check signal.</div>'; }
 }
@@ -195,13 +201,23 @@ function renderWeek(){
     return `<div class="day">
       <div class="dayhd"><span class="dayname">${dayLabel(d.date)}</span><span class="daytot" id="dt${di}">${tot}h</span></div>
       <label>Site</label>
-      <select onchange="WEEK.days[${di}].site=this.value">${siteOptions(d.site)}</select>
+      <select onchange="setDaySite(${di},this.value)">${siteOptions(d.site)}</select>
       <div id="dl${di}">${d.lines.map((l,li)=>lineHtml(di,li,l)).join('')}</div>
       <button type="button" class="addline" onclick="addLine(${di})">+ add work order</button>
+      ${allowHtml(di,d)}
     </div>`;
   }).join('');
+  const cf=document.getElementById('closeFoot'); if(cf) cf.textContent=`This week closes ${WEEK.closeDayName} — change your hours any time until then.`;
   calcWeekTotal();
 }
+function setDaySite(di,site){ WEEK.days[di].site=site; const ok=ALLOWANCES_BY_SITE[site]||[]; WEEK.days[di].allowances=(WEEK.days[di].allowances||[]).filter(a=>ok.includes(a)); renderWeek(); }
+function allowHtml(di,d){
+  const opts=ALLOWANCES_BY_SITE[d.site]||[];
+  if(!d.site || !opts.length) return '';
+  const chks=opts.map(a=>`<label class="achk"><input type="checkbox" ${d.allowances.includes(a)?'checked':''} onchange="toggleAllow(${di},'${a.replace(/'/g,"\\'")}',this.checked)"> ${esc(a)}</label>`).join('');
+  return `<div class="allow"><div class="allow-h">Allowances</div>${chks}</div>`;
+}
+function toggleAllow(di,name,on){ const arr=WEEK.days[di].allowances; const i=arr.indexOf(name); if(on&&i<0)arr.push(name); else if(!on&&i>=0)arr.splice(i,1); }
 function addLine(di){ WEEK.days[di].lines.push({wo:'',hr:''}); renderWeek(); }
 function delLine(di,li){ WEEK.days[di].lines.splice(li,1); renderWeek(); }
 function dayTot(di){ const el=document.getElementById('dt'+di); if(el) el.textContent=WEEK.days[di].lines.reduce((s,l)=>s+(parseFloat(l.hr)||0),0).toFixed(1)+'h'; }
@@ -218,8 +234,9 @@ function pick(di,li,wo){ WEEK.days[di].lines[li].wo=wo; renderWeek(); }
 
 async function submitWeek(){
   const days=WEEK.days.map(d=>({ date:d.date, site:d.site,
-    lines:d.lines.filter(l=>l.wo.trim()&&parseFloat(l.hr)>0).map(l=>({wo:l.wo.trim(),hr:parseFloat(l.hr)})) }))
-    .filter(d=>d.site && d.lines.length);
+    lines:d.lines.filter(l=>l.wo.trim()&&parseFloat(l.hr)>0).map(l=>({wo:l.wo.trim(),hr:parseFloat(l.hr)})),
+    allowances:(d.allowances||[]) }))
+    .filter(d=>d.site && (d.lines.length || d.allowances.length));
   const btn=document.getElementById('submit'); btn.disabled=true; btn.textContent='Submitting…';
   try{
     const res=await api('/.netlify/functions/submitweek',{days});
@@ -233,7 +250,7 @@ async function submitWeek(){
 }
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='2';
+const APP_VERSION='3';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
