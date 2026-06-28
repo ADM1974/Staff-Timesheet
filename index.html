@@ -100,7 +100,7 @@
     <input class="hp" tabindex="-1" autocomplete="off" id="company">
     <button type="button" class="btn" id="submit" onclick="submitWeek()">Submit week</button>
     <div class="foot" id="closeFoot" style="text-align:center;color:var(--muted);font-size:11px;margin-top:12px">You can change this week's hours until it closes.</div>
-    <div class="foot" style="text-align:center;margin-top:14px"><a href="guide.html" target="_blank" rel="noopener" style="color:var(--brand-dark);font-weight:600;text-decoration:none;font-size:12.5px">How to use this app →</a></div>
+    <div class="foot" style="text-align:center;margin-top:14px"><a href="guide.html" style="color:var(--brand-dark);font-weight:600;text-decoration:none;font-size:12.5px">How to use this app →</a></div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -262,7 +262,7 @@ async function submitWeek(){
 }
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='15';
+const APP_VERSION='16';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
