@@ -209,7 +209,7 @@ function renderWeek(){
     return `<div class="day">
       <div class="dayhd"><span class="dayname">${dayLabel(d.date)}</span><span class="daytot" id="dt${di}">${tot}h</span></div>
       <div id="dl${di}">${d.lines.map((l,li)=>lineHtml(di,li,l)).join('')}</div>
-      <button type="button" class="addline" onclick="addLine(${di})">+ add work order</button>
+      <button type="button" class="addline" onclick="addLine(${di})">+ add work order and description</button>
       ${allowHtml(di,d)}
     </div>`;
   }).join('');
@@ -262,7 +262,7 @@ async function submitWeek(){
 }
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='16';
+const APP_VERSION='17';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
