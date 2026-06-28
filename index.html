@@ -76,6 +76,7 @@
     <span class="ttl">Staff Timesheet</span>
     <span class="user hidden" id="who" onclick="signOut()">Sign out</span>
   </div>
+  <div id="cdbar" style="display:none;background:#2b2f36;color:#fff;text-align:center;font-size:12.5px;padding:6px 10px;letter-spacing:.3px">⏱ Timesheets emailed to payroll in <b id="cdval" style="font-variant-numeric:tabular-nums">—</b></div>
 
   <!-- ===== SIGN IN ===== -->
   <div class="body" id="gateBody">
@@ -178,6 +179,7 @@ async function loadWeek(){
         lines:(d.lines||[]).map(l=>({wo:String(l.wo||''),hr:(l.hr!=null?String(l.hr):''),comment:String(l.comment||'')})),
         allowances:(d.allowances||[]).slice() })) };
     renderWeek();
+    setCountdown(nextPayrollSend(WEEK.closeDayName));
   }catch(e){ document.getElementById('days').innerHTML='<div class="loading">Couldn’t load your week — check signal.</div>'; }
 }
 function siteOptions(sel){ let h=`<option value="" ${sel?'':'selected'} disabled>Choose site…</option>`; for(const s of SITES) h+=`<option ${s===sel?'selected':''}>${esc(s)}</option>`; return h; }
@@ -264,8 +266,36 @@ async function submitWeek(){
   finally{ btn.disabled=false; btn.textContent='Submit week'; }
 }
 
+/* ---- payroll countdown: time until this site's approved hours are emailed to accounts ---- */
+const _WD=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+let CD_TARGET=null;
+function nextPayrollSend(closeDayName){
+  const closeIdx=_WD.indexOf(closeDayName); if(closeIdx<0) return null;
+  const wantDow=(closeIdx+1)%7; const now=new Date();
+  let cand=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate(),1,0,0));
+  if(cand.getTime()<=now.getTime()) cand=new Date(cand.getTime()+86400000);
+  for(let i=0;i<8;i++){
+    const nz=new Intl.DateTimeFormat('en-CA',{timeZone:'Pacific/Auckland',year:'numeric',month:'2-digit',day:'2-digit'}).format(cand);
+    const [y,m,d]=nz.split('-').map(Number);
+    if(new Date(Date.UTC(y,m-1,d)).getUTCDay()===wantDow) return cand;
+    cand=new Date(cand.getTime()+86400000);
+  }
+  return cand;
+}
+function setCountdown(target){ CD_TARGET=target?new Date(target):null; tickCountdown(); }
+function tickCountdown(){
+  const el=document.getElementById('cdval'), bar=document.getElementById('cdbar');
+  if(!bar||!el) return;
+  if(!CD_TARGET){ bar.style.display='none'; return; }
+  let ms=CD_TARGET.getTime()-Date.now(); if(ms<0) ms=0;
+  const d=Math.floor(ms/86400000), h=Math.floor(ms%86400000/3600000), m=Math.floor(ms%3600000/60000);
+  el.textContent=d+'d '+String(h).padStart(2,'0')+'h '+String(m).padStart(2,'0')+'m';
+  bar.style.display='';
+}
+setInterval(tickCountdown,30000);
+
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='18';
+const APP_VERSION='19';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
