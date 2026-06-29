@@ -271,16 +271,17 @@ const _WD=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday
 let CD_TARGET=null;
 function nextPayrollSend(closeDayName){
   const closeIdx=_WD.indexOf(closeDayName); if(closeIdx<0) return null;
-  const wantDow=(closeIdx+1)%7; const now=new Date();
-  let cand=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate(),1,0,0));
-  if(cand.getTime()<=now.getTime()) cand=new Date(cand.getTime()+86400000);
-  for(let i=0;i<8;i++){
-    const nz=new Intl.DateTimeFormat('en-CA',{timeZone:'Pacific/Auckland',year:'numeric',month:'2-digit',day:'2-digit'}).format(cand);
-    const [y,m,d]=nz.split('-').map(Number);
-    if(new Date(Date.UTC(y,m-1,d)).getUTCDay()===wantDow) return cand;
-    cand=new Date(cand.getTime()+86400000);
+  const wantDow=(closeIdx+1)%7;
+  let t=new Date(); t.setUTCMinutes(0,0,0); t=new Date(t.getTime()+3600000);
+  for(let i=0;i<24*14;i++){
+    const dtf=new Intl.DateTimeFormat('en-GB',{timeZone:'Pacific/Auckland',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hour12:false});
+    const p={}; for(const x of dtf.formatToParts(t)) p[x.type]=x.value;
+    let hh=+p.hour; if(hh===24) hh=0;
+    const dw=new Date(Date.UTC(+p.year,+p.month-1,+p.day)).getUTCDay();
+    if(hh===11 && dw===wantDow) return t;   // 11:00 NZ on the day after close
+    t=new Date(t.getTime()+3600000);
   }
-  return cand;
+  return null;
 }
 function setCountdown(target){ CD_TARGET=target?new Date(target):null; tickCountdown(); }
 function tickCountdown(){
@@ -295,7 +296,7 @@ function tickCountdown(){
 setInterval(tickCountdown,30000);
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='19';
+const APP_VERSION='20';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
