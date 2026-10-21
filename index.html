@@ -221,9 +221,12 @@ function renderWeek(){
   const cf=document.getElementById('closeFoot'); if(cf) cf.textContent=`This week closes ${WEEK.closeDayName} — change your hours any time until then.`;
   calcWeekTotal();
 }
-function setDaySite(di,site){ WEEK.days[di].site=site; const ok=(ALLOWANCES_BY_SITE[site]||{}).daily||[]; WEEK.days[di].allowances=(WEEK.days[di].allowances||[]).filter(a=>ok.includes(a)); renderWeek(); }
+// daily allowances for a site on a given date (Allowances "Days" column limits some to certain weekdays; 0 = Sunday)
+function siteDailyOpts(site,date){ const sa=ALLOWANCES_BY_SITE[site]||{}, dm=sa.days||{}, wd=new Date(date+'T00:00:00Z').getUTCDay(); return (sa.daily||[]).filter(a=>!dm[a] || dm[a].includes(wd)); }
+function setDaySite(di,site){ WEEK.days[di].site=site; const ok=siteDailyOpts(site,WEEK.days[di].date); WEEK.days[di].allowances=(WEEK.days[di].allowances||[]).filter(a=>ok.includes(a)); renderWeek(); }
 function allowHtml(di,d){
-  const opts=(ALLOWANCES_BY_SITE[d.site]||{}).daily||[];
+  const opts=siteDailyOpts(d.site,d.date);
+  d.allowances=(d.allowances||[]).filter(a=>opts.includes(a));   // drop any ticked on a day it no longer applies
   if(!d.site || !opts.length) return '';
   const chks=opts.map(a=>`<label class="achk"><input type="checkbox" ${d.allowances.includes(a)?'checked':''} onchange="toggleAllow(${di},'${a.replace(/'/g,"\\'")}',this.checked)"> ${esc(a)}</label>`).join('');
   return `<div class="allow"><div class="allow-h">Allowances</div>${chks}</div>`;
@@ -296,7 +299,7 @@ function tickCountdown(){
 setInterval(tickCountdown,30000);
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='21';
+const APP_VERSION='22';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){

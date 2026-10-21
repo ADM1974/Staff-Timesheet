@@ -127,7 +127,22 @@ async function getHomeSite(token, email, sitesMap) {
   return '';
 }
 
-// All active allowances grouped by site name → [allowance titles].
+// Optional "Days" column on Allowances (multi-choice Monday..Sunday) → weekday
+// indexes (0 = Sunday). Blank → null = every day. Accepts an array or "Sat, Sun".
+const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+function parseDays(v) {
+  const raw = Array.isArray(v) ? v : String(v || '').split(/[,;]/);
+  const idx = [...new Set(raw.map(x => DAY_KEYS.indexOf(String(x || '').trim().toLowerCase().slice(0, 3))).filter(i => i >= 0))];
+  return idx.length ? idx.sort() : null;
+}
+// Is daily allowance `title` allowed on ISO date `date`, given a { title:[weekday idx] } map?
+function allowedOnDate(daysMap, title, date) {
+  const days = daysMap && daysMap[title];
+  return !days || days.includes(new Date(String(date).slice(0, 10) + 'T00:00:00Z').getUTCDay());
+}
+
+// All active allowances grouped by site name → { daily:[], weekly:[], days:{} }.
+// days = { title: [weekday idx] } for daily allowances limited to certain days.
 async function getAllowancesBySite(token, sitesMap) {
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
   let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
@@ -137,16 +152,24 @@ async function getAllowancesBySite(token, sitesMap) {
   r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) return {};
   const out = {};
+  const anyDay = {};                            // site → daily titles with a row open to every day
   for (const it of ((await r.json()).value || [])) {
     const f = it.fields || {};
     if (f.Active === false) continue;
     const siteName = f.SiteLookupId != null ? sitesMap.byId[String(f.SiteLookupId)] : '';
     const title = String(f.Title || '').trim();
     if (!siteName || !title) continue;
-    const bucket = (out[siteName] = out[siteName] || { daily: [], weekly: [] });
-    (String(f.Frequency || 'Daily').trim().toLowerCase() === 'weekly' ? bucket.weekly : bucket.daily).push(title);
+    const bucket = (out[siteName] = out[siteName] || { daily: [], weekly: [], days: {} });
+    if (String(f.Frequency || 'Daily').trim().toLowerCase() === 'weekly') { if (!bucket.weekly.includes(title)) bucket.weekly.push(title); continue; }
+    if (!bucket.daily.includes(title)) bucket.daily.push(title);
+    const days = parseDays(f.Days);
+    if (!days) (anyDay[siteName] = anyDay[siteName] || new Set()).add(title);
+    else bucket.days[title] = [...new Set([...(bucket.days[title] || []), ...days])].sort();
   }
-  for (const k in out) { out[k].daily.sort((a, b) => a.localeCompare(b)); out[k].weekly.sort((a, b) => a.localeCompare(b)); }
+  for (const k in out) {
+    for (const t of (anyDay[k] || [])) delete out[k].days[t];
+    out[k].daily.sort((a, b) => a.localeCompare(b)); out[k].weekly.sort((a, b) => a.localeCompare(b));
+  }
   return out;
 }
 
@@ -272,6 +295,7 @@ exports.getActiveSites = getActiveSites;
 exports.getSitesMap = getSitesMap;
 exports.getHomeSite = getHomeSite;
 exports.getAllowancesBySite = getAllowancesBySite;
+exports.allowedOnDate = allowedOnDate;
 exports.getWorkOrders = getWorkOrders;
 exports.weekContext = weekContext;
 exports.getUserEntries = getUserEntries;

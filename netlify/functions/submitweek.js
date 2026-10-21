@@ -1,7 +1,7 @@
 // Saves the signed-in staff member's whole week — REPLACES their rows for the
 // open week (delete + rewrite). Week boundary is the home site's; hours are per
 // the day's chosen site; allowances are validated against that day's site.
-const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, weekContext, getUserEntries, getRejectedWeek, createItem, deleteItem } = require('./staff');
+const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, allowedOnDate, weekContext, getUserEntries, getRejectedWeek, createItem, deleteItem } = require('./staff');
 
 exports.handler = async (event) => {
   const headers = { 'Content-Type': 'application/json' };
@@ -37,10 +37,11 @@ exports.handler = async (event) => {
       const lines = (Array.isArray(day.lines) ? day.lines : [])
         .map(l => ({ wo: String(l.wo || '').trim().slice(0, 200), hr: parseFloat(l.hr), comment: String(l.comment || '').trim().slice(0, 500) }))
         .filter(l => l.wo && l.hr > 0 && l.hr <= 24);
-      const dailyOpts = new Set(((allowancesBySite[site] || {}).daily) || []);
+      const siteAllow = allowancesBySite[site] || {};
+      const dailyOpts = new Set(siteAllow.daily || []);
       const allowances = (Array.isArray(day.allowances) ? day.allowances : [])
         .map(a => String(a || '').trim())
-        .filter(a => dailyOpts.has(a));           // daily allowances for the day's site
+        .filter(a => dailyOpts.has(a) && allowedOnDate(siteAllow.days, a, date));   // daily allowances for the day's site, on their allowed days
       if (!lines.length && !allowances.length) continue;
       clean.push({ date, site, lines, allowances });
     }

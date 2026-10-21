@@ -52,6 +52,19 @@ Open the site → **Sign in with Microsoft** → you should land on your week �
 hours → Submit → check a row appears in Timesheets with your name and `Notes` =
 "Staff app · <your email>".
 
+## Allowances (shift types, e.g. Night Shift)
+
+Set up in the **Allowances** SharePoint list, one row per allowance per site — no redeploy:
+
+- **Title** — the name shown on the tick box.
+- **Site** — Lookup to the Sites list.
+- **Frequency** — `Daily` (tick box on each day; the default if blank) or `Weekly` (one tick box for the whole week).
+- **Active** — set to **No** to hide it.
+- **Days** *(optional, Choice with "allow multiple selections": Monday … Sunday)* — limits a
+  **Daily** allowance to those weekdays, e.g. Saturday + Sunday for a weekend allowance. Leave
+  blank for every day. The tick box only shows on those days, and the server rejects it on any
+  other day. Ignored for Weekly allowances.
+
 ## Notes
 - **Identity is verified server-side** — the function checks the Microsoft token's
   signature, your tenant, and audience, so a forged sign-in can't write data.
