@@ -6,6 +6,11 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+# Hourly: fix each Shifts-linked site's roster in the first hour of its pay week
+# (see netlify/functions/roster-snapshot.js). Already-fixed weeks are left alone.
+[functions."roster-snapshot"]
+  schedule = "7 * * * *"
+
 [[headers]]
   for = "/"
   [headers.values]

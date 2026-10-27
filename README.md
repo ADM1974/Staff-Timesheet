@@ -64,6 +64,44 @@ Set up in the **Allowances** SharePoint list, one row per allowance per site —
   **Daily** allowance to those weekdays, e.g. Saturday + Sunday for a weekend allowance. Leave
   blank for every day. The tick box only shows on those days, and the server rejects it on any
   other day. Ignored for Weekly allowances.
+- **ShiftName** *(optional, single line of text)* — the Teams Shifts label(s) that pre-tick this
+  allowance, e.g. `Night` or `Night, Late`. A shift whose name equals the allowance's Title matches
+  without it. See *Teams Shifts roster* below.
+
+## Teams Shifts roster (rostered shift + "Shift worked")
+
+For a site linked to a Team, each day card shows the person's **rostered shift** from Teams Shifts
+and a **Shift worked** dropdown. On days not saved yet the app starts from the roster: that site,
+that shift, and the allowances its name maps to (Allowances → `ShiftName`). The person can change
+**Shift worked** if they worked something else — the shift's allowances swap over, anything they
+ticked by hand stays — and the day shows "Different from the roster".
+
+**The roster is fixed at the start of each pay week.** The hourly `roster-snapshot` function
+(schedule in `netlify.toml`) saves each linked site's published shifts for the week into the
+**RosterSnapshots** list in the first hour of the week (the day after the site's CloseDay, in the
+Team's time zone). After that the app only reads the snapshot — later edits in Teams don't change
+the week; staff fix differences themselves with **Shift worked**. If a week has no snapshot (first
+deploy, a missed run), the first person to open the app takes it, and that becomes the week's roster.
+Only **published** (shared) shifts count, on the day each shift **starts**.
+
+Each saved row records **ShiftWorked** (what they say they worked) and **RosteredShift** (the
+week's roster for that day, e.g. `Night 18:00–06:00 (BNE)`), so a supervisor can spot differences.
+
+### Setup
+1. **Permission (admin):** entra.microsoft.com → App registrations → the app-only app (`CLIENT_ID`)
+   → API permissions → Microsoft Graph → **Application** → `Schedule.Read.All` → **Grant admin consent**.
+2. **Sites list:** add **ShiftsTeamId** (single line of text); on the site's row put its Team id —
+   BNE = `2d11d80c-1357-4fb5-9325-d5646295c102` (AEL AU - BNE). Leave blank for unlinked sites.
+3. **Timesheets list:** add **ShiftWorked** and **RosteredShift** (single line of text). Until they
+   exist the app still saves, just without them.
+4. **RosterSnapshots list:** created automatically on first run. If the app isn't allowed to create
+   lists, create it yourself: columns **Site**, **WeekStart**, **TakenAt** (single line of text) and
+   **Data** (multiple lines of text, plain). Don't edit **Data** by hand.
+5. Optional: Allowances → **ShiftName** for shift labels that differ from the allowance name.
+6. If the hourly run's log (Netlify → Logs → Functions → roster-snapshot) shows Shifts refusing an
+   app-only call without a user, set env **SHIFTS_ACT_AS** to a Team owner's Entra object id.
+
+Contractors aren't in Teams, so this is staff-app only.
 
 ## Notes
 - **Identity is verified server-side** — the function checks the Microsoft token's

@@ -68,6 +68,12 @@
   .allow-h{font-size:10px;font-weight:700;letter-spacing:.4px;color:var(--muted);text-transform:uppercase;margin-bottom:4px;}
   .achk{display:flex;align-items:center;gap:9px;font-size:14px;padding:6px 0;color:var(--ink);cursor:pointer;}
   .achk input{width:18px;height:18px;flex:0 0 auto;margin:0;}
+  .shift{background:#f3f7fc;border:1px solid #d6e4f5;border-radius:9px;padding:8px 10px;margin-bottom:9px;font-size:13px;}
+  .shift .ros{color:var(--ink);} .shift .ros b{color:var(--brand-dark);}
+  .shift .fixed{font-size:10.5px;color:var(--muted);}
+  .shift label{display:flex;align-items:center;gap:8px;margin-top:7px;font-size:12px;font-weight:600;color:var(--muted);}
+  .shift select{flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 8px;font-size:14px;font-family:inherit;background:#fff;color:var(--ink);}
+  .shift .diff{margin-top:6px;font-size:12px;font-weight:600;color:var(--amber);}
   .hidden{display:none !important;}
 </style>
 </head>
@@ -112,6 +118,7 @@
 <script>
 let WORKORDERS = [];   // per-site, loaded from the WorkOrders SharePoint list on each week load
 let msalInstance=null, account=null, WEEK=null, SITES=[], ALLOWANCES_BY_SITE={}, WEEKLY_OPTIONS=[], WEEK_ALLOWANCES=[], userName='there', userEmail='';
+let ROSTER_SITES=[], ROSTER_ERRORS=[];   // sites linked to Teams Shifts; any whose roster couldn't be read
 const SCOPES=['openid','profile','email'];
 
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2800);}
@@ -173,11 +180,17 @@ async function loadWeek(){
     WORKORDERS=data.workOrders||[];
     WEEKLY_OPTIONS=data.weeklyOptions||[];
     WEEK_ALLOWANCES=(data.weekAllowances||[]).slice();
+    ROSTER_SITES=data.rosterSites||[]; ROSTER_ERRORS=data.rosterErrors||[];
     WEEK={ weekStart:data.weekStart, weekEnd:data.weekEnd, closeDayName:data.closeDayName, homeSite:data.homeSite||'',
       rejected:!!data.rejected, rejectionReason:data.rejectionReason||'',
       days:(data.days||[]).map(d=>({ date:d.date, site:d.site||data.homeSite||'',
         lines:(d.lines||[]).map(l=>({wo:String(l.wo||''),hr:(l.hr!=null?String(l.hr):''),comment:String(l.comment||'')})),
-        allowances:(d.allowances||[]).slice() })) };
+        allowances:(d.allowances||[]).slice(),
+        rostered:(d.rostered||[]), shiftWorked:String(d.shiftWorked||'') })) };
+    // Days not saved yet start from the week's (fixed) roster: its site, shift and matching allowances.
+    // Saved days keep exactly what the person entered.
+    (data.days||[]).forEach((d,di)=>{ const r=(d.rostered||[])[0]; if(d.saved || !r) return;
+      const day=WEEK.days[di]; if(SITES.includes(r.site)) day.site=r.site; applyShift(day,'',r.name); });
     renderWeek();
     setCountdown(nextPayrollSend(WEEK.closeDayName));
   }catch(e){ document.getElementById('days').innerHTML='<div class="loading">Couldn’t load your week — check signal.</div>'; }
@@ -208,11 +221,13 @@ function renderWeek(){
     `<div class="sh">Hi ${esc(firstName(userName))} — your timesheet</div>
      <div class="rng">${dayLabel(WEEK.weekStart)} – ${dayLabel(WEEK.weekEnd)}</div>
      <div class="diag" style="font-size:11px;color:#8a8f98;margin-top:2px">${esc(userEmail||'?')} · home site: ${WEEK.homeSite?esc(WEEK.homeSite):'— not found in Workers list'}</div>
+     ${ROSTER_ERRORS.length?`<div style="font-size:11px;color:var(--amber);margin-top:2px">Couldn’t read the Teams roster for ${esc(ROSTER_ERRORS.join(', '))} — enter your shift yourself.</div>`:''}
      <div class="close">${WEEK.rejected?'Fix this week and tap Submit to send it back for approval.':'Open until '+esc(WEEK.closeDayName)+' — re-enter any time to change it.'}</div>`;
   document.getElementById('days').innerHTML=weekAllowHtml()+WEEK.days.map((d,di)=>{
     const tot=d.lines.reduce((s,l)=>s+(parseFloat(l.hr)||0),0).toFixed(1);
     return `<div class="day">
       <div class="dayhd"><span class="dayname">${dayLabel(d.date)}</span><span class="daytot" id="dt${di}">${tot}h</span></div>
+      ${shiftHtml(di,d)}
       <div id="dl${di}">${d.lines.map((l,li)=>lineHtml(di,li,l)).join('')}</div>
       <button type="button" class="addline" onclick="addLine(${di})">+ add work order and description</button>
       ${allowHtml(di,d)}
@@ -231,6 +246,36 @@ function allowHtml(di,d){
   const chks=opts.map(a=>`<label class="achk"><input type="checkbox" ${d.allowances.includes(a)?'checked':''} onchange="toggleAllow(${di},'${a.replace(/'/g,"\\'")}',this.checked)"> ${esc(a)}</label>`).join('');
   return `<div class="allow"><div class="allow-h">Allowances</div>${chks}</div>`;
 }
+/* ---- Teams Shifts: rostered shift (fixed at the start of the week) + the shift actually worked ---- */
+function h(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }   // shift names come from Teams
+function rosterText(r){ return r.map(x=>`<b>${h(x.name)}</b> ${h(x.start)}–${h(x.end)}${x.site?' · '+h(x.site):''}`).join(' &nbsp;+&nbsp; '); }
+function shiftChoices(d){
+  const sa=ALLOWANCES_BY_SITE[d.site]||{}, out=[];
+  for(const n of [...d.rostered.map(x=>x.name), ...(sa.shiftNames||[]), d.shiftWorked]) if(n && !out.some(o=>o.toLowerCase()===n.toLowerCase())) out.push(n);
+  return out;
+}
+function shiftHtml(di,d){
+  const unreadable=!d.rostered.length && ROSTER_ERRORS.includes(d.site);
+  const linked=!unreadable && (d.rostered.length>0 || ROSTER_SITES.includes(d.site)), choices=shiftChoices(d);
+  if(!linked && !unreadable && !choices.length) return '';
+  const ros=d.rostered.length ? `<div class="ros">📅 Rostered: ${rosterText(d.rostered)}</div><div class="fixed">Roster as at the start of the week — change “Shift worked” if you worked something different.</div>`
+          : unreadable ? `<div class="ros">📅 Roster unavailable — pick the shift you worked.</div>`
+          : linked ? `<div class="ros">📅 Not rostered this day</div>` : '';
+  const opts=`<option value="" ${d.shiftWorked?'':'selected'}>— no shift / not working —</option>`+choices.map(n=>`<option ${n===d.shiftWorked?'selected':''}>${h(n)}</option>`).join('');
+  const rosName=(d.rostered[0]||{}).name||'';
+  const diff=linked && (d.shiftWorked||rosName) && d.shiftWorked.toLowerCase()!==rosName.toLowerCase() ? `<div class="diff">⚠ Different from the roster — your supervisor will see this.</div>` : '';
+  return `<div class="shift">${ros}<label>Shift worked <select onchange="setShift(${di},this.value)">${opts}</select></label>${diff}</div>`;
+}
+// Switch a day's shift: untick the allowances the old shift brought in, tick the new shift's
+// (only those valid for the day's site and weekday). Anything ticked by hand is left alone.
+function applyShift(day,oldName,newName){
+  const map=(ALLOWANCES_BY_SITE[day.site]||{}).shiftMap||{}, ok=siteDailyOpts(day.site,day.date);
+  const oldA=oldName?(map[oldName.toLowerCase()]||[]):[], newA=newName?(map[newName.toLowerCase()]||[]):[];
+  day.allowances=(day.allowances||[]).filter(a=>!oldA.includes(a)||newA.includes(a));
+  for(const a of newA) if(ok.includes(a) && !day.allowances.includes(a)) day.allowances.push(a);
+  day.shiftWorked=newName||'';
+}
+function setShift(di,name){ const d=WEEK.days[di]; applyShift(d,d.shiftWorked,name); renderWeek(); }
 function toggleAllow(di,name,on){ const arr=WEEK.days[di].allowances; const i=arr.indexOf(name); if(on&&i<0)arr.push(name); else if(!on&&i>=0)arr.splice(i,1); }
 function weekAllowHtml(){
   if(!WEEKLY_OPTIONS.length) return '';
@@ -255,8 +300,10 @@ function pick(di,li,wo){ WEEK.days[di].lines[li].wo=wo; renderWeek(); }
 async function submitWeek(){
   const days=WEEK.days.map(d=>({ date:d.date, site:d.site,
     lines:d.lines.filter(l=>l.wo.trim()&&parseFloat(l.hr)>0).map(l=>({wo:l.wo.trim(),hr:parseFloat(l.hr),comment:String(l.comment||'').trim().slice(0,500)})),
-    allowances:(d.allowances||[]) }))
+    allowances:(d.allowances||[]), shiftWorked:d.shiftWorked||'' }))
     .filter(d=>d.site && (d.lines.length || d.allowances.length));
+  const noHours=days.filter(d=>!d.lines.length && d.allowances.length).map(d=>`${dayLabel(d.date)}: ${d.allowances.join(', ')}`);
+  if(noHours.length && !confirm('These days have allowances but no hours:\n\n'+noHours.join('\n')+'\n\nSubmit them anyway? (Cancel to go back and fix — e.g. untick if you didn’t work.)')) return;
   const btn=document.getElementById('submit'); btn.disabled=true; btn.textContent='Submitting…';
   try{
     const res=await api('/.netlify/functions/submitweek',{days,weekAllowances:WEEK_ALLOWANCES});
@@ -299,7 +346,7 @@ function tickCountdown(){
 setInterval(tickCountdown,30000);
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='22';
+const APP_VERSION='23';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){

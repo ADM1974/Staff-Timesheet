@@ -12,6 +12,10 @@
 //   TENANT_ID, CLIENT_ID, CLIENT_SECRET   - app-only creds (SharePoint writes)
 //   SP_SITE_ID, LIST_ID                   - the SharePoint site + Timesheets list
 //   STAFF_CLIENT_ID                       - the Staff sign-in app registration (token audience)
+//
+// Teams Shifts (optional): a site whose Sites row has a ShiftsTeamId (the Team's id)
+// gets its published roster read from Shifts. Needs the Graph APPLICATION permission
+// Schedule.Read.All (admin-consented) on the CLIENT_ID app registration.
 
 const TOKEN_URL = t => `https://login.microsoftonline.com/${t}/oauth2/v2.0/token`;
 
@@ -68,7 +72,7 @@ async function getActiveSites(token) {
     .filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 
-// Sites list → { byName: {lowerName:{id,name,closeDayIndex}}, byId: {id:name} }.
+// Sites list → { byName: {lowerName:{id,name,closeDayIndex,shiftsTeamId}}, byId: {id:name} }.
 async function getSitesMap(token) {
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
   let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
@@ -83,7 +87,8 @@ async function getSitesMap(token) {
     const name = String(f.Title || '').trim();
     if (!name) continue;
     const idx = WEEKDAYS.findIndex(d => d.toLowerCase() === String(f.CloseDay || '').trim().toLowerCase());
-    byName[name.toLowerCase()] = { id: it.id, name, closeDayIndex: idx < 0 ? 0 : idx };
+    const shiftsTeamId = String(f.ShiftsTeamId || '').trim();   // optional: Teams Shifts roster for this site
+    byName[name.toLowerCase()] = { id: it.id, name, closeDayIndex: idx < 0 ? 0 : idx, shiftsTeamId };
     byId[String(it.id)] = name;
   }
   return { byName, byId };
@@ -141,8 +146,11 @@ function allowedOnDate(daysMap, title, date) {
   return !days || days.includes(new Date(String(date).slice(0, 10) + 'T00:00:00Z').getUTCDay());
 }
 
-// All active allowances grouped by site name → { daily:[], weekly:[], days:{} }.
+// All active allowances grouped by site name → { daily:[], weekly:[], days:{}, shiftMap:{}, shiftNames:[] }.
 // days = { title: [weekday idx] } for daily allowances limited to certain days.
+// shiftMap = { lower-case Shifts label: [daily allowance titles] } — a shift pre-ticks
+// these. Labels come from the optional "ShiftName" column ("Night" or "Night, Late");
+// the allowance's own title always counts too. shiftNames = those labels as typed.
 async function getAllowancesBySite(token, sitesMap) {
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
   let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
@@ -159,9 +167,15 @@ async function getAllowancesBySite(token, sitesMap) {
     const siteName = f.SiteLookupId != null ? sitesMap.byId[String(f.SiteLookupId)] : '';
     const title = String(f.Title || '').trim();
     if (!siteName || !title) continue;
-    const bucket = (out[siteName] = out[siteName] || { daily: [], weekly: [], days: {} });
+    const bucket = (out[siteName] = out[siteName] || { daily: [], weekly: [], days: {}, shiftMap: {}, shiftNames: [] });
     if (String(f.Frequency || 'Daily').trim().toLowerCase() === 'weekly') { if (!bucket.weekly.includes(title)) bucket.weekly.push(title); continue; }
     if (!bucket.daily.includes(title)) bucket.daily.push(title);
+    const labels = String(f.ShiftName || '').split(/[,;]/).map(x => x.trim()).filter(Boolean);
+    for (const lab of labels) if (!bucket.shiftNames.includes(lab)) bucket.shiftNames.push(lab);
+    for (const lab of [...labels, title]) {
+      const k = lab.toLowerCase();
+      if (!(bucket.shiftMap[k] = bucket.shiftMap[k] || []).includes(title)) bucket.shiftMap[k].push(title);
+    }
     const days = parseDays(f.Days);
     if (!days) (anyDay[siteName] = anyDay[siteName] || new Set()).add(title);
     else bucket.days[title] = [...new Set([...(bucket.days[title] || []), ...days])].sort();
@@ -169,6 +183,7 @@ async function getAllowancesBySite(token, sitesMap) {
   for (const k in out) {
     for (const t of (anyDay[k] || [])) delete out[k].days[t];
     out[k].daily.sort((a, b) => a.localeCompare(b)); out[k].weekly.sort((a, b) => a.localeCompare(b));
+    out[k].shiftNames.sort((a, b) => a.localeCompare(b));
   }
   return out;
 }
@@ -281,6 +296,26 @@ async function deleteItem(token, id) {
   if (!r.ok && r.status !== 204) throw new Error('graph delete ' + r.status + ' ' + (await r.text()));
 }
 
+// Create a Timesheets row, tolerating optional columns that don't exist yet: if
+// SharePoint rejects the row (400), retry without the shift columns, then also
+// without Comment. `state` (shared across one save) remembers which columns were
+// missing so later rows skip them straight away.
+const OPTIONAL_GROUPS = [['ShiftWorked', 'RosteredShift'], ['Comment']];
+async function createItemResilient(token, fields, state) {
+  const missing = (state.missing = state.missing || new Set());
+  const f = { ...fields };
+  for (const k of missing) delete f[k];
+  for (;;) {
+    try { await createItem(token, f); return; }
+    catch (e) {
+      if (!/^graph create 400\b/.test(String(e.message))) throw e;   // only a rejected row is worth retrying
+      const group = OPTIONAL_GROUPS.find(g => g.some(k => k in f));
+      if (!group) throw e;
+      for (const k of group) { delete f[k]; missing.add(k); }
+    }
+  }
+}
+
 // ---- /staff endpoint: confirm sign-in and return the staff member's name ----
 exports.handler = async (event) => {
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
@@ -301,4 +336,6 @@ exports.weekContext = weekContext;
 exports.getUserEntries = getUserEntries;
 exports.getRejectedWeek = getRejectedWeek;
 exports.createItem = createItem;
+exports.createItemResilient = createItemResilient;
+exports.weekFor = weekFor;
 exports.deleteItem = deleteItem;
