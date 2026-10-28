@@ -102,38 +102,43 @@ async function snapListId(token, create) {
   return (_snapListId = (await r.json()).id);
 }
 
-// The list's real (internal) column names for Site / WeekStart / TakenAt / Data.
-// A column made by hand can have a different internal name from its display name
-// (e.g. renamed after creation), so match on either. Missing columns → clear error.
+// Each snapshot row is keyed by its built-in Title ("BNE 2026-10-28") and holds the
+// roster as JSON in the "Data" column — the only column the app needs. Site /
+// WeekStart / TakenAt are filled in too when the list has them (handy to read in
+// SharePoint). Columns are matched by display name or internal name, skipping
+// read-only twins (LinkTitle) and the Title column itself, since that holds the key.
 let _snapCols = null;
 async function snapColumns(token, listId) {
   if (_snapCols && _snapCols.listId === listId) return _snapCols.cols;
   const r = await fetch(`${spBase()}/lists/${listId}/columns?$select=name,displayName,readOnly`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) throw new Error('snapshot columns ' + r.status);
-  const all = ((await r.json()).value || []).filter(c => !c.readOnly);   // skip read-only twins like LinkTitle (a renamed Title)
+  const all = ((await r.json()).value || []).filter(c => !c.readOnly && c.name !== 'Title');
   const norm = x => String(x || '').toLowerCase().replace(/[\s_]+/g, '');
-  const cols = {}, missing = [];
+  const cols = {};
   for (const want of ['Site', 'WeekStart', 'TakenAt', 'Data']) {
     const c = all.find(c => norm(c.displayName) === norm(want)) || all.find(c => norm(c.name) === norm(want));
-    if (c) cols[want] = c.name; else missing.push(want);
+    if (c) cols[want] = c.name;
   }
-  if (missing.length) throw new Error(`${SNAP_LIST} list is missing column(s): ${missing.join(', ')}`);
+  if (!cols.Data) throw new Error(`${SNAP_LIST} list needs a "Data" column (Multiple lines of text)`);
   _snapCols = { listId, cols };
   return cols;
 }
+const snapKey = (siteName, weekStart) => `${siteName} ${weekStart}`;
 
 // The saved snapshot for one site + week, or null. If two exist, the earliest wins.
 async function loadSnapshot(token, listId, siteName, weekStart) {
   const c = await snapColumns(token, listId);
-  const url = `${spBase()}/lists/${listId}/items?expand=fields&$top=50&$filter=` + encodeURIComponent(`fields/${c.WeekStart} eq '${weekStart}'`);
+  const key = snapKey(siteName, weekStart).replace(/'/g, "''");
+  const url = `${spBase()}/lists/${listId}/items?expand=fields&$top=50&$filter=` + encodeURIComponent(`fields/Title eq '${key}'`);
   const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token, Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' } });
-  if (!r.ok) throw new Error('snapshot read ' + r.status);
-  const rows = ((await r.json()).value || [])
-    .map(it => it.fields || {})
-    .filter(f => String(f[c.Site] || '').toLowerCase() === siteName.toLowerCase())
-    .sort((a, b) => String(a[c.TakenAt] || '').localeCompare(String(b[c.TakenAt] || '')));
-  for (const f of rows) { try { return JSON.parse(f[c.Data] || ''); } catch (e) { /* unreadable row: try the next */ } }
-  return null;
+  if (!r.ok) throw new Error('snapshot read ' + r.status + ' ' + (await r.text()).slice(0, 300));
+  const snaps = [];
+  for (const it of ((await r.json()).value || [])) {
+    try { const j = JSON.parse((it.fields || {})[c.Data] || ''); if (j && Array.isArray(j.shifts)) snaps.push(j); }
+    catch (e) { /* unreadable row: skip */ }
+  }
+  snaps.sort((a, b) => String(a.takenAt || '').localeCompare(String(b.takenAt || '')));
+  return snaps[0] || null;
 }
 
 async function takeSnapshot(token, site, wk, actAs) {
@@ -143,9 +148,13 @@ async function takeSnapshot(token, site, wk, actAs) {
   const { tz, shifts } = await readTeamWeek(token, site, wk, actAs || process.env.SHIFTS_ACT_AS || '');
   const snap = { site: site.name, weekStart: wk.weekStart, weekEnd: wk.weekEnd, tz, takenAt: new Date().toISOString(), shifts };
   const c = await snapColumns(token, listId);
+  const fields = { Title: snapKey(site.name, wk.weekStart), [c.Data]: JSON.stringify(snap) };
+  if (c.Site) fields[c.Site] = site.name;
+  if (c.WeekStart) fields[c.WeekStart] = wk.weekStart;
+  if (c.TakenAt) fields[c.TakenAt] = snap.takenAt;
   const r = await fetch(`${spBase()}/lists/${listId}/items`, {
     method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields: { Title: `${site.name} ${wk.weekStart}`, [c.Site]: site.name, [c.WeekStart]: wk.weekStart, [c.TakenAt]: snap.takenAt, [c.Data]: JSON.stringify(snap) } }),
+    body: JSON.stringify({ fields }),
   });
   if (!r.ok) throw new Error('snapshot write ' + r.status + ' ' + (await r.text()).slice(0, 300));
   return snap;
@@ -155,9 +164,9 @@ async function takeSnapshot(token, site, wk, actAs) {
 // Never throws: a site whose roster can't be read is listed in `errors`.
 // → { byDate: { 'YYYY-MM-DD': [{ site, name, start, end }] }, errors: [site] }
 async function getRoster(token, userId, sitesMap, days) {
-  const byDate = {}, errors = [], details = {};
+  const byDate = {}, errors = [], details = {}, shiftNames = {};
   const sites = Object.values(sitesMap.byName).filter(s => s.shiftsTeamId);
-  if (!userId || !days.length || !sites.length) return { byDate, errors, details };
+  if (!userId || !days.length || !sites.length) return { byDate, errors, details, shiftNames };
   const want = new Set(days);
   for (const site of sites) {
     try {
@@ -167,6 +176,8 @@ async function getRoster(token, userId, sitesMap, days) {
         const listId = await snapListId(token, false);
         const snap = (listId && await loadSnapshot(token, listId, site.name, wk.weekStart)) || await takeSnapshot(token, site, wk, userId);
         for (const x of (snap.shifts || [])) {
+          const names = (shiftNames[site.name] = shiftNames[site.name] || []);   // every shift the team runs this week
+          if (x.n && !names.some(n => n.toLowerCase() === x.n.toLowerCase())) names.push(x.n);
           if (x.u !== userId || !want.has(x.d)) continue;
           (byDate[x.d] = byDate[x.d] || []).push({ site: site.name, name: x.n, start: x.s, end: x.e });
         }
@@ -177,7 +188,8 @@ async function getRoster(token, userId, sitesMap, days) {
       details[site.name] = String(e.message || e).slice(0, 300);   // shown in the app so setup problems can be diagnosed
     }
   }
-  return { byDate, errors, details };
+  for (const k in shiftNames) shiftNames[k].sort((a, b) => a.localeCompare(b));
+  return { byDate, errors, details, shiftNames };
 }
 
 // One-line summary saved on timesheet rows, e.g. "Night 18:00–06:00 (BNE)".
