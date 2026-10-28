@@ -114,7 +114,7 @@
     <div id="days"><div class="loading">Loading your week…</div></div>
     <div class="totbar"><span>Week total</span><b id="weekTotal">0.0 h</b></div>
     <input class="hp" tabindex="-1" autocomplete="off" id="company">
-    <button type="button" class="btn" id="submit" onclick="submitWeek()">Submit week</button>
+    <button type="button" class="btn" id="submit" onclick="submitWeek()">Save week</button>
     <div class="foot" id="closeFoot" style="text-align:center;color:var(--muted);font-size:11px;margin-top:12px">You can change this week's hours until it closes.</div>
     <div class="foot" style="text-align:center;margin-top:14px"><a href="guide.html" style="color:var(--brand-dark);font-weight:600;text-decoration:none;font-size:12.5px">How to use this app →</a></div>
   </div>
@@ -177,7 +177,7 @@ function restoreDraft(){   // after a sign-in redirect: put back what they'd typ
     const dr=JSON.parse(sessionStorage.getItem('weekDraft')||'null'); sessionStorage.removeItem('weekDraft');
     if(!dr || dr.weekStart!==WEEK.weekStart || !Array.isArray(dr.days) || dr.days.length!==WEEK.days.length) return;
     WEEK.days=dr.days; WEEK_ALLOWANCES=Array.isArray(dr.weekAllowances)?dr.weekAllowances:[];
-    setTimeout(()=>toast('Your unsaved changes were kept — tap Submit week'),400);
+    setTimeout(()=>toast('Your unsaved changes were kept — tap Save week'),400);
   }catch(_){}
 }
 class ReauthNeeded extends Error { constructor(){ super('Signing you in again…'); } }
@@ -269,7 +269,7 @@ function renderWeek(){
      <div class="rng">${dayLabel(WEEK.weekStart)} – ${dayLabel(WEEK.weekEnd)}</div>
      <div class="diag" style="font-size:11px;color:#8a8f98;margin-top:2px">${esc(userEmail||'?')} · home site: ${WEEK.homeSite?esc(WEEK.homeSite):'— not found in Workers list'}</div>
      ${ROSTER_ERRORS.length?`<div style="font-size:11px;color:var(--amber);margin-top:2px">Couldn’t read the Teams roster for ${esc(ROSTER_ERRORS.join(', '))} — enter your shift yourself.${ROSTER_ERRORS.map(s=>ROSTER_ERR_DETAIL[s]?`<br><span style="color:var(--muted);word-break:break-word">${esc(s)}: ${esc(ROSTER_ERR_DETAIL[s])}</span>`:'').join('')}</div>`:''}
-     <div class="close">${WEEK.rejected?'Fix this week and tap Submit to send it back for approval.':'Open until '+esc(WEEK.closeDayName)+' — re-enter any time to change it.'}</div>`;
+     <div class="close">${WEEK.rejected?'Fix this week and tap Save week to send it back for approval.':'Open until '+esc(WEEK.closeDayName)+' — re-enter any time to change it.'}</div>`;
   document.getElementById('days').innerHTML=weekAllowHtml()+WEEK.days.map((d,di)=>{
     const tot=d.lines.reduce((s,l)=>s+(parseFloat(l.hr)||0),0).toFixed(1);
     return `<div class="day">
@@ -385,7 +385,7 @@ async function submitWeek(){
     .filter(d=>d.site && (d.lines.length || d.allowances.length));
   const noHours=days.filter(d=>!d.lines.length && d.allowances.length).map(d=>`${dayLabel(d.date)}: ${d.allowances.join(', ')}`);
   if(noHours.length && !confirm('These days have allowances but no hours:\n\n'+noHours.join('\n')+'\n\nSubmit them anyway? (Cancel to go back and fix — e.g. untick if you didn’t work.)')) return;
-  const btn=document.getElementById('submit'); btn.disabled=true; btn.textContent='Submitting…';
+  const btn=document.getElementById('submit'); btn.disabled=true; btn.textContent='Saving…';
   try{
     const res=await api('/.netlify/functions/submitweek',{days,weekAllowances:WEEK_ALLOWANCES});
     if(res.status===401){ toast('Please sign in again'); return; }
@@ -395,7 +395,7 @@ async function submitWeek(){
     saveWarnings(data);
     await loadWeek();
   }catch(e){ if(!(e instanceof ReauthNeeded)) toast('Couldn’t save — check signal and try again'); }
-  finally{ btn.disabled=false; btn.textContent='Submit week'; }
+  finally{ btn.disabled=false; btn.textContent='Save week'; }
 }
 
 /* ---- payroll countdown: time until this site's approved hours are emailed to accounts ---- */
@@ -428,7 +428,7 @@ function tickCountdown(){
 setInterval(tickCountdown,30000);
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='26.1';
+const APP_VERSION='26.2';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
