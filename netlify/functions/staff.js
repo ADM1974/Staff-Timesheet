@@ -20,7 +20,10 @@
 const TOKEN_URL = t => `https://login.microsoftonline.com/${t}/oauth2/v2.0/token`;
 
 // ---- app-only token for SharePoint writes (client credentials) ----
+// Cached while the function instance stays warm (tokens last ~1h; refreshed 5 min early).
+let _appTok = null;
 async function getAppToken() {
+  if (_appTok && _appTok.exp > Date.now()) return _appTok.token;
   const body = new URLSearchParams({
     client_id: process.env.CLIENT_ID,
     client_secret: process.env.CLIENT_SECRET,
@@ -29,7 +32,9 @@ async function getAppToken() {
   });
   const r = await fetch(TOKEN_URL(process.env.TENANT_ID), { method: 'POST', body });
   if (!r.ok) throw new Error('token ' + r.status + ' ' + (await r.text()));
-  return (await r.json()).access_token;
+  const j = await r.json();
+  _appTok = { token: j.access_token, exp: Date.now() + (Number(j.expires_in) || 3600) * 1000 - 5 * 60 * 1000 };
+  return j.access_token;
 }
 
 // ---- verify a staff member's Microsoft ID token, return their identity ----
@@ -59,13 +64,27 @@ async function validateStaffToken(authHeader) {
 // ===== reused SharePoint helpers (same logic as the contractor app) =====
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+// The site's lists ({id, displayName}), fetched once and shared by every helper —
+// list ids never change, so a warm instance reuses them for 10 minutes.
+let _lists = null;
+function getLists(token) {
+  if (_lists && _lists.exp > Date.now()) return _lists.p;
+  const p = fetch(`https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } })
+    .then(async r => { if (!r.ok) throw new Error('graph lists ' + r.status + ' ' + (await r.text())); return (await r.json()).value || []; });
+  _lists = { p, exp: Date.now() + 10 * 60 * 1000 };
+  p.catch(() => { _lists = null; });               // don't cache a failure
+  return p;
+}
+async function findList(token, name) {
+  const want = name.toLowerCase().replace(/\s+/g, '');
+  return (await getLists(token)).find(l => String(l.displayName || '').toLowerCase().replace(/\s+/g, '') === want) || null;
+}
+
 async function getActiveSites(token) {
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
-  let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) throw new Error('graph lists ' + r.status + ' ' + (await r.text()));
-  const list = ((await r.json()).value || []).find(l => String(l.displayName || '').toLowerCase() === 'sites');
+  const list = await findList(token, 'sites');
   if (!list) throw new Error('Sites list not found');
-  r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
+  let r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) throw new Error('graph items ' + r.status + ' ' + (await r.text()));
   return ((await r.json()).value || [])
     .filter(it => (it.fields || {}).Active !== false)
@@ -73,26 +92,26 @@ async function getActiveSites(token) {
     .filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 
-// Sites list → { byName: {lowerName:{id,name,closeDayIndex,shiftsTeamId}}, byId: {id:name} }.
+// Sites list → { byName: {lowerName:{id,name,closeDayIndex,shiftsTeamId}}, byId: {id:name}, active: [names] }.
 async function getSitesMap(token) {
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
-  let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) throw new Error('graph lists ' + r.status + ' ' + (await r.text()));
-  const list = ((await r.json()).value || []).find(l => String(l.displayName || '').toLowerCase() === 'sites');
+  const list = await findList(token, 'sites');
   if (!list) throw new Error('Sites list not found');
-  r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
+  let r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) throw new Error('graph items ' + r.status + ' ' + (await r.text()));
-  const byName = {}, byId = {};
+  const byName = {}, byId = {}, active = [];
   for (const it of ((await r.json()).value || [])) {
     const f = it.fields || {};
     const name = String(f.Title || '').trim();
     if (!name) continue;
+    if (f.Active !== false) active.push(name);
     const idx = WEEKDAYS.findIndex(d => d.toLowerCase() === String(f.CloseDay || '').trim().toLowerCase());
     const shiftsTeamId = String(f.ShiftsTeamId || '').trim();   // optional: Teams Shifts roster for this site
     byName[name.toLowerCase()] = { id: it.id, name, closeDayIndex: idx < 0 ? 0 : idx, shiftsTeamId };
     byId[String(it.id)] = name;
   }
-  return { byName, byId };
+  active.sort((a, b) => a.localeCompare(b));
+  return { byName, byId, active };
 }
 
 // Generate the company email from a worker's name: first-initial.surname@ael.co
@@ -112,11 +131,9 @@ async function getHomeSite(token, email, sitesMap) {
   const want = String(email || '').trim().toLowerCase();
   if (!want) return '';
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
-  let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) return '';
-  const list = ((await r.json()).value || []).find(l => String(l.displayName || '').toLowerCase() === 'workers');
+  const list = await findList(token, 'workers').catch(() => null);
   if (!list) return '';
-  r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
+  let r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) return '';
   for (const it of ((await r.json()).value || [])) {
     const f = it.fields || {};
@@ -154,11 +171,9 @@ function allowedOnDate(daysMap, title, date) {
 // the allowance's own title always counts too. shiftNames = those labels as typed.
 async function getAllowancesBySite(token, sitesMap) {
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
-  let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) return {};
-  const list = ((await r.json()).value || []).find(l => String(l.displayName || '').toLowerCase() === 'allowances');
+  const list = await findList(token, 'allowances').catch(() => null);
   if (!list) return {};
-  r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
+  let r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) return {};
   const out = {};
   const anyDay = {};                            // site → daily titles with a row open to every day
@@ -193,11 +208,9 @@ async function getAllowancesBySite(token, sitesMap) {
 // Returns [] if there's no list yet, so the typeahead simply has no suggestions.
 async function getWorkOrders(token, siteId, siteName) {
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
-  let r = await fetch(`${base}/lists?$select=id,displayName`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) return [];
-  const list = ((await r.json()).value || []).find(l => String(l.displayName || '').toLowerCase().replace(/\s+/g, '') === 'workorders');
+  const list = await findList(token, 'workorders').catch(() => null);
   if (!list) return [];
-  r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
+  let r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) return [];
   const wantId = siteId != null ? String(siteId) : '';
   const wantName = String(siteName || '').trim().toLowerCase();
@@ -242,13 +255,19 @@ function weekContext(closeDayIdx) {
   return { ...computeOpenWeek(closeDayIdx), closeDayName: WEEKDAYS[closeDayIdx] };
 }
 
-// A user's Timesheets rows within [weekStart,weekEnd], by the ContractorId key
-// (for staff this holds their 365 object id).
-async function getUserEntries(token, userKey, weekStart, weekEnd) {
+// All of a user's Timesheets rows, by the ContractorId key (for staff this holds
+// their 365 object id). Pass the result to getUserEntries/getRejectedWeek so one
+// request serves both.
+async function getUserRows(token, userKey) {
   const url = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}/lists/${process.env.LIST_ID}/items?expand=fields&$top=999&$filter=fields/ContractorId eq '${userKey}'`;
   const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token, Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' } });
   if (!r.ok) throw new Error('graph entries ' + r.status + ' ' + (await r.text()));
-  return ((await r.json()).value || []).filter(it => {
+  return (await r.json()).value || [];
+}
+
+// A user's Timesheets rows within [weekStart,weekEnd] (rows = getUserRows result, if already fetched).
+async function getUserEntries(token, userKey, weekStart, weekEnd, rows) {
+  return (rows || await getUserRows(token, userKey)).filter(it => {
     const ed = String((it.fields || {}).EntryDate || '').slice(0, 10);
     return ed >= weekStart && ed <= weekEnd;
   });
@@ -267,12 +286,10 @@ function weekFor(dateStr, closeDayIdx) {
 
 // If the staff member has a REJECTED week, return it (so they can fix + re-submit
 // even after that week closed). Most recent rejected week wins. null if none.
-async function getRejectedWeek(token, userKey, closeDayIdx) {
+async function getRejectedWeek(token, userKey, closeDayIdx, rows) {
   if (!userKey) return null;
-  const url = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}/lists/${process.env.LIST_ID}/items?expand=fields&$top=999&$filter=fields/ContractorId eq '${userKey}'`;
-  const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token, Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' } });
-  if (!r.ok) return null;
-  const rejected = ((await r.json()).value || []).filter(it => String((it.fields || {}).Status || '') === 'Rejected');
+  if (!rows) { try { rows = await getUserRows(token, userKey); } catch (e) { return null; } }
+  const rejected = rows.filter(it => String((it.fields || {}).Status || '') === 'Rejected');
   if (!rejected.length) return null;
   let latest = '';
   for (const it of rejected) { const dd = String((it.fields || {}).EntryDate || '').slice(0, 10); if (dd > latest) latest = dd; }
@@ -328,6 +345,7 @@ exports.handler = async (event) => {
 exports.getAppToken = getAppToken;
 exports.validateStaffToken = validateStaffToken;
 exports.getActiveSites = getActiveSites;
+exports.getUserRows = getUserRows;
 exports.getSitesMap = getSitesMap;
 exports.getHomeSite = getHomeSite;
 exports.getAllowancesBySite = getAllowancesBySite;

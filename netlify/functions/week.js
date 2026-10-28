@@ -2,7 +2,7 @@
 // The week is driven by their HOME site's close day (Workers list, by email).
 // Also returns each day's rostered shift (Teams Shifts, as captured at the start of the
 // week — see roster-snapshot.js) and what was saved: the shift they say they worked.
-const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, weekContext, getUserEntries, getWorkOrders, getRejectedWeek } = require('./staff');
+const { getAppToken, validateStaffToken, getSitesMap, getHomeSite, getAllowancesBySite, weekContext, getUserEntries, getUserRows, getWorkOrders, getRejectedWeek } = require('./staff');
 const { getRoster } = require('./roster-snapshot');
 
 exports.handler = async (event) => {
@@ -11,21 +11,26 @@ exports.handler = async (event) => {
   if (!user) return { statusCode: 401, headers, body: '{"ok":false}' };
 
   try {
+    // Independent SharePoint reads run side by side — one after another they took ~8s.
     const token = await getAppToken();
-    const sitesMap = await getSitesMap(token);
-    const homeSite = await getHomeSite(token, user.email, sitesMap);
+    const [sitesMap, rows] = await Promise.all([getSitesMap(token), getUserRows(token, user.id)]);
+    const sites = sitesMap.active;
+    const [homeSite, allowancesBySite] = await Promise.all([
+      getHomeSite(token, user.email, sitesMap),
+      getAllowancesBySite(token, sitesMap),                                // {site:{daily,weekly}}
+    ]);
     const homeInfo = sitesMap.byName[String(homeSite || '').toLowerCase()] || {};
     const closeDayIdx = homeInfo.closeDayIndex || 0;
-    const workOrders = await getWorkOrders(token, homeInfo.id, homeSite);   // typeahead for the home site
     const wk = weekContext(closeDayIdx);
-    const rejected = await getRejectedWeek(token, user.id, closeDayIdx);    // a sent-back week to fix?
+    const rejected = await getRejectedWeek(token, user.id, closeDayIdx, rows);    // a sent-back week to fix?
     const active = rejected ? { ...rejected, closeDayName: wk.closeDayName } : wk;  // edit that week, else the open week
-    const sites = await getActiveSites(token);
-    const allowancesBySite = await getAllowancesBySite(token, sitesMap);   // {site:{daily,weekly}}
     const weeklyOptions = ((allowancesBySite[homeSite] || {}).weekly) || []; // staff weekly = home site
     const weeklySet = new Set(weeklyOptions);
-    const entries = await getUserEntries(token, user.id, active.weekStart, active.weekEnd);
-    const roster = await getRoster(token, user.id, sitesMap, active.days);   // fixed at the start of each week
+    const entries = await getUserEntries(token, user.id, active.weekStart, active.weekEnd, rows);
+    const [workOrders, roster] = await Promise.all([
+      getWorkOrders(token, homeInfo.id, homeSite),                         // typeahead for the home site
+      getRoster(token, user.id, sitesMap, active.days),                    // fixed at the start of each week
+    ]);
 
     // group existing rows → per-day site/hours/daily-allowances + week-level weekly allowances
     const byDate = {};

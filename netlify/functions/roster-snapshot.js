@@ -102,16 +102,37 @@ async function snapListId(token, create) {
   return (_snapListId = (await r.json()).id);
 }
 
+// The list's real (internal) column names for Site / WeekStart / TakenAt / Data.
+// A column made by hand can have a different internal name from its display name
+// (e.g. renamed after creation), so match on either. Missing columns → clear error.
+let _snapCols = null;
+async function snapColumns(token, listId) {
+  if (_snapCols && _snapCols.listId === listId) return _snapCols.cols;
+  const r = await fetch(`${spBase()}/lists/${listId}/columns?$select=name,displayName`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) throw new Error('snapshot columns ' + r.status);
+  const all = (await r.json()).value || [];
+  const norm = x => String(x || '').toLowerCase().replace(/[\s_]+/g, '');
+  const cols = {}, missing = [];
+  for (const want of ['Site', 'WeekStart', 'TakenAt', 'Data']) {
+    const c = all.find(c => norm(c.displayName) === norm(want)) || all.find(c => norm(c.name) === norm(want));
+    if (c) cols[want] = c.name; else missing.push(want);
+  }
+  if (missing.length) throw new Error(`${SNAP_LIST} list is missing column(s): ${missing.join(', ')}`);
+  _snapCols = { listId, cols };
+  return cols;
+}
+
 // The saved snapshot for one site + week, or null. If two exist, the earliest wins.
 async function loadSnapshot(token, listId, siteName, weekStart) {
-  const url = `${spBase()}/lists/${listId}/items?expand=fields&$top=50&$filter=` + encodeURIComponent(`fields/WeekStart eq '${weekStart}'`);
+  const c = await snapColumns(token, listId);
+  const url = `${spBase()}/lists/${listId}/items?expand=fields&$top=50&$filter=` + encodeURIComponent(`fields/${c.WeekStart} eq '${weekStart}'`);
   const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token, Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' } });
   if (!r.ok) throw new Error('snapshot read ' + r.status);
   const rows = ((await r.json()).value || [])
     .map(it => it.fields || {})
-    .filter(f => String(f.Site || '').toLowerCase() === siteName.toLowerCase())
-    .sort((a, b) => String(a.TakenAt || '').localeCompare(String(b.TakenAt || '')));
-  for (const f of rows) { try { return JSON.parse(f.Data || ''); } catch (e) { /* unreadable row: try the next */ } }
+    .filter(f => String(f[c.Site] || '').toLowerCase() === siteName.toLowerCase())
+    .sort((a, b) => String(a[c.TakenAt] || '').localeCompare(String(b[c.TakenAt] || '')));
+  for (const f of rows) { try { return JSON.parse(f[c.Data] || ''); } catch (e) { /* unreadable row: try the next */ } }
   return null;
 }
 
@@ -121,9 +142,10 @@ async function takeSnapshot(token, site, wk, actAs) {
   if (existing) return existing;                     // already fixed — never overwrite
   const { tz, shifts } = await readTeamWeek(token, site, wk, actAs || process.env.SHIFTS_ACT_AS || '');
   const snap = { site: site.name, weekStart: wk.weekStart, weekEnd: wk.weekEnd, tz, takenAt: new Date().toISOString(), shifts };
+  const c = await snapColumns(token, listId);
   const r = await fetch(`${spBase()}/lists/${listId}/items`, {
     method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields: { Title: `${site.name} ${wk.weekStart}`, Site: site.name, WeekStart: wk.weekStart, TakenAt: snap.takenAt, Data: JSON.stringify(snap) } }),
+    body: JSON.stringify({ fields: { Title: `${site.name} ${wk.weekStart}`, [c.Site]: site.name, [c.WeekStart]: wk.weekStart, [c.TakenAt]: snap.takenAt, [c.Data]: JSON.stringify(snap) } }),
   });
   if (!r.ok) throw new Error('snapshot write ' + r.status + ' ' + (await r.text()).slice(0, 300));
   return snap;
