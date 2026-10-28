@@ -108,9 +108,9 @@ async function snapListId(token, create) {
 let _snapCols = null;
 async function snapColumns(token, listId) {
   if (_snapCols && _snapCols.listId === listId) return _snapCols.cols;
-  const r = await fetch(`${spBase()}/lists/${listId}/columns?$select=name,displayName`, { headers: { Authorization: 'Bearer ' + token } });
+  const r = await fetch(`${spBase()}/lists/${listId}/columns?$select=name,displayName,readOnly`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) throw new Error('snapshot columns ' + r.status);
-  const all = (await r.json()).value || [];
+  const all = ((await r.json()).value || []).filter(c => !c.readOnly);   // skip read-only twins like LinkTitle (a renamed Title)
   const norm = x => String(x || '').toLowerCase().replace(/[\s_]+/g, '');
   const cols = {}, missing = [];
   for (const want of ['Site', 'WeekStart', 'TakenAt', 'Data']) {
