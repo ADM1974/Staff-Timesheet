@@ -1,7 +1,8 @@
 // Saves the signed-in staff member's whole week — REPLACES their rows for the
-// open week (delete + rewrite). Week boundary is the home site's; hours are per
+// open week: the new rows are written first and only then are the old ones removed,
+// so a save that fails part-way is undone and leaves the week as it was. Week boundary is the home site's; hours are per
 // the day's chosen site; allowances are validated against that day's site.
-const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, allowedOnDate, weekContext, getUserEntries, getRejectedWeek, createItemResilient, deleteItem } = require('./staff');
+const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, allowedOnDate, weekContext, getUserEntries, getRejectedWeek, createItemResilient, deleteItem, pool } = require('./staff');
 const { getRoster, rosterLabel, allowanceForShift } = require('./roster-snapshot');
 
 exports.handler = async (event) => {
@@ -53,16 +54,15 @@ exports.handler = async (event) => {
       .map(a => String(a || '').trim())
       .filter(a => weeklySet.has(a));             // weekly allowances = the home site's
 
-    const existing = await getUserEntries(token, user.id, target.weekStart, target.weekEnd);
-    for (const it of existing) await deleteItem(token, it.id);
-
+    // The new rows, grouped so each day is written in order (line order is kept);
+    // different days are written side by side.
     const batchId = 'S-' + target.weekStart + '-' + Math.random().toString(36).slice(2, 8).toUpperCase();
-    let created = 0;
-    const cols = {};                                  // which optional columns exist (learned on first write)
+    const groups = [];
     for (const day of clean) {
       const shiftCols = {};                           // stamped on every row of the day
       if (day.shiftWorked) shiftCols.ShiftWorked = day.shiftWorked;
       if (day.rosteredShift) shiftCols.RosteredShift = day.rosteredShift;
+      const rows = [];
       for (const l of day.lines) {
         const fields = {
           Title: user.name, ContractorId: user.id, EntryDate: day.date + 'T00:00:00Z',
@@ -71,27 +71,37 @@ exports.handler = async (event) => {
         };
         if (l.comment) fields.Comment = l.comment;
         if (l.co) fields.Callout = 'Yes';                 // this job was a call-out
-        await createItemResilient(token, fields, cols);   // Comment / Callout / shift columns may not exist yet
-        created++;
+        rows.push(fields);
       }
       for (const a of day.allowances) {
-        await createItemResilient(token, {
+        rows.push({
           Title: user.name, ContractorId: user.id, EntryDate: day.date + 'T00:00:00Z',
           Site: day.site, RowType: 'Allowance', Allowance: a, Hours: 0, Status: 'Submitted', BatchID: batchId,
           Notes: 'Staff app allowance · ' + user.email, ...shiftCols,
-        }, cols);
-        created++;
+        });
       }
+      groups.push(rows);
     }
-    for (const a of weekAllowances) {
-      await createItemResilient(token, {
-        Title: user.name, ContractorId: user.id, EntryDate: target.weekStart + 'T00:00:00Z',
-        Site: homeSite, RowType: 'Allowance', Allowance: a, Hours: 0, Status: 'Submitted', BatchID: batchId,
-        Notes: 'Staff app weekly allowance · ' + user.email,
-      }, cols);
-      created++;
+    if (weekAllowances.length) groups.push(weekAllowances.map(a => ({
+      Title: user.name, ContractorId: user.id, EntryDate: target.weekStart + 'T00:00:00Z',
+      Site: homeSite, RowType: 'Allowance', Allowance: a, Hours: 0, Status: 'Submitted', BatchID: batchId,
+      Notes: 'Staff app weekly allowance · ' + user.email,
+    })));
+
+    // REPLACE the week: write the new rows first; if anything fails, remove what was
+    // written and leave the old week untouched. Only after a full write are the old rows removed.
+    const existing = await getUserEntries(token, user.id, target.weekStart, target.weekEnd);
+    const cols = {};                                  // optional columns found missing + comment counts (shared by the save)
+    const createdIds = [];
+    try {
+      await pool(groups, 4, async rows => { for (const f of rows) createdIds.push(await createItemResilient(token, f, cols)); });
+    } catch (e) {
+      await pool(createdIds.slice(), 4, id => deleteItem(token, id).catch(() => {}));
+      throw e;
     }
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, created, weekStart: wk.weekStart, weekEnd: wk.weekEnd }) };
+    await pool(existing, 4, it => deleteItem(token, it.id));
+    const created = createdIds.length;
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, created, commentsShortened: cols.shortened || 0, commentsDropped: cols.dropped || 0, weekStart: wk.weekStart, weekEnd: wk.weekEnd }) };
   } catch (err) {
     console.error(err);
     return { statusCode: 502, headers, body: JSON.stringify({ ok: false, error: 'server' }) };

@@ -315,34 +315,66 @@ async function getRejectedWeek(token, userKey, closeDayIdx, rows) {
 }
 
 const itemsUrl = () => `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}/lists/${process.env.LIST_ID}/items`;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// SharePoint throttles bursts of writes (429) and has the odd 5xx / dropped
+// connection — retry those with backoff instead of failing (or losing data).
+async function graphWrite(url, opts) {
+  for (let i = 0; ; i++) {
+    let r = null;
+    try { r = await fetch(url, opts); } catch (e) { if (i >= 3) throw e; }
+    if (r && !(r.status === 429 || r.status >= 500)) return r;
+    if (i >= 3) return r;
+    const ra = r ? Number(r.headers.get('retry-after')) : 0;
+    await sleep(ra > 0 ? Math.min(ra, 10) * 1000 : 400 * 2 ** i);
+  }
+}
 async function createItem(token, fields) {
-  const r = await fetch(itemsUrl(), { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ fields }) });
+  const r = await graphWrite(itemsUrl(), { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ fields }) });
   if (!r.ok) throw new Error('graph create ' + r.status + ' ' + (await r.text()));
+  return (await r.json()).id;
 }
 async function deleteItem(token, id) {
-  const r = await fetch(`${itemsUrl()}/${id}`, { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok && r.status !== 204) throw new Error('graph delete ' + r.status + ' ' + (await r.text()));
+  const r = await graphWrite(`${itemsUrl()}/${id}`, { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok && r.status !== 204 && r.status !== 404) throw new Error('graph delete ' + r.status + ' ' + (await r.text()));
 }
 
-// Create a Timesheets row, tolerating optional columns that don't exist yet: if
-// SharePoint rejects the row (400), retry without the shift columns, then also
-// without Comment. `state` (shared across one save) remembers which columns were
-// missing so later rows skip them straight away.
+// Create a Timesheets row (returns its id), tolerating optional columns that don't
+// exist yet: when SharePoint names a missing column, that column's group is left off
+// (and remembered in `state.missing` for the rest of the save). A Comment is never
+// lost silently: one refused for length (a single-line column holds 255) is
+// shortened, and any comment that can't be saved is counted in state.shortened /
+// state.dropped so the person is told.
 const OPTIONAL_GROUPS = [['ShiftWorked', 'RosteredShift'], ['Callout'], ['Comment']];
 async function createItemResilient(token, fields, state) {
   const missing = (state.missing = state.missing || new Set());
+  state.shortened = state.shortened || 0; state.dropped = state.dropped || 0;
   const f = { ...fields };
   for (const k of missing) delete f[k];
+  if (fields.Comment && !('Comment' in f)) state.dropped++;
+  let shortened = false;
   for (;;) {
-    try { await createItem(token, f); return; }
+    try { const id = await createItem(token, f); if (shortened) state.shortened++; return id; }
     catch (e) {
-      if (!/^graph create 400\b/.test(String(e.message))) throw e;   // only a rejected row is worth retrying
-      const named = (/Field '([^']+)' is not recognized/i.exec(String(e.message)) || [])[1];   // SharePoint names the missing column
-      const group = (named && OPTIONAL_GROUPS.find(g => g.includes(named) && g.some(k => k in f))) || OPTIONAL_GROUPS.find(g => g.some(k => k in f));
+      const msg = String(e.message);
+      if (!/^graph create 400\b/.test(msg)) throw e;   // only a refused row is worth retrying (throttling is retried in createItem)
+      const named = (/Field '([^']+)' is not recognized/i.exec(msg) || [])[1];   // SharePoint names a missing column
+      if (!named && !shortened && typeof f.Comment === 'string' && f.Comment.length > 255) { f.Comment = f.Comment.slice(0, 255); shortened = true; continue; }
+      const group = (named && OPTIONAL_GROUPS.find(g => g.includes(named) && g.some(k => k in f)))
+        || OPTIONAL_GROUPS.find(g => g.some(k => k in f));
       if (!group) throw e;
-      for (const k of group) { delete f[k]; missing.add(k); }
+      for (const k of group) { delete f[k]; if (named) missing.add(k); }   // only a column SharePoint says is missing is skipped for later rows
+      if (group.includes('Comment') && fields.Comment) { state.dropped++; shortened = false; }
     }
   }
+}
+
+// Run fn over items, n at a time. On a failure, lets the in-flight ones finish, starts no more, then throws.
+async function pool(items, n, fn) {
+  let i = 0, err = null;
+  const worker = async () => { while (!err && i < items.length) { const k = i++; try { await fn(items[k]); } catch (e) { err = err || e; } } };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  if (err) throw err;
 }
 
 // ---- /staff endpoint: confirm sign-in and return the staff member's name ----
@@ -358,6 +390,7 @@ exports.validateStaffToken = validateStaffToken;
 exports.getActiveSites = getActiveSites;
 exports.getUserRows = getUserRows;
 exports.shiftKey = shiftKey;
+exports.pool = pool;
 exports.getSitesMap = getSitesMap;
 exports.getHomeSite = getHomeSite;
 exports.getAllowancesBySite = getAllowancesBySite;

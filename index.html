@@ -358,7 +358,25 @@ function suggest(di,li,v){
 function hideSugg(di,li){ setTimeout(()=>{const b=document.getElementById('sg'+di+'_'+li); if(b)b.style.display='none';},150); }
 function pick(di,li,wo){ WEEK.days[di].lines[li].wo=wo; renderWeek(); }
 
+// Lines with something typed but no work order or no hours can't be saved — say so
+// rather than dropping them (and their comments) without a word.
+function incompleteLines(){
+  const out=[];
+  WEEK.days.forEach(d=>d.lines.forEach((l,li)=>{
+    const any=String(l.wo||'').trim()||String(l.hr||'').trim()||String(l.comment||'').trim();
+    if(any && !(String(l.wo||'').trim() && parseFloat(l.hr)>0)) out.push(`${dayLabel(d.date)} line ${li+1}: ${String(l.wo||'').trim()?'no hours':'no work order'}`);
+  }));
+  return out;
+}
+function saveWarnings(data){
+  const w=[];
+  if(data.commentsShortened) w.push(`${data.commentsShortened} comment${data.commentsShortened===1?' was':'s were'} too long and cut to 255 characters`);
+  if(data.commentsDropped) w.push(`${data.commentsDropped} comment${data.commentsDropped===1?'':'s'} couldn’t be saved`);
+  if(w.length) alert('Week saved, but '+w.join(' and ')+'. Please let your supervisor know.');
+}
 async function submitWeek(){
+  const bad=incompleteLines();
+  if(bad.length && !confirm('These lines are missing a work order or hours, so they — and their comments — won’t be saved:\n\n'+bad.join('\n')+'\n\nSave the rest anyway? (Cancel to go back and fix them.)')) return;
   const days=WEEK.days.map(d=>({ date:d.date, site:d.site,
     lines:d.lines.filter(l=>l.wo.trim()&&parseFloat(l.hr)>0).map(l=>({wo:l.wo.trim(),hr:parseFloat(l.hr),comment:String(l.comment||'').trim().slice(0,500),co:!!l.co})),
     allowances:(d.allowances||[]), shiftWorked:d.shiftWorked||'' }))
@@ -372,6 +390,7 @@ async function submitWeek(){
     const data=await res.json();
     if(!data.ok) throw new Error('save');
     toast(`Week saved — ${data.created} entr${data.created===1?'y':'ies'}`);
+    saveWarnings(data);
     await loadWeek();
   }catch(e){ if(!(e instanceof ReauthNeeded)) toast('Couldn’t save — check signal and try again'); }
   finally{ btn.disabled=false; btn.textContent='Submit week'; }
@@ -407,7 +426,7 @@ function tickCountdown(){
 setInterval(tickCountdown,30000);
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='25';
+const APP_VERSION='26';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
