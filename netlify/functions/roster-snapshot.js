@@ -133,9 +133,9 @@ async function takeSnapshot(token, site, wk, actAs) {
 // Never throws: a site whose roster can't be read is listed in `errors`.
 // → { byDate: { 'YYYY-MM-DD': [{ site, name, start, end }] }, errors: [site] }
 async function getRoster(token, userId, sitesMap, days) {
-  const byDate = {}, errors = [];
+  const byDate = {}, errors = [], details = {};
   const sites = Object.values(sitesMap.byName).filter(s => s.shiftsTeamId);
-  if (!userId || !days.length || !sites.length) return { byDate, errors };
+  if (!userId || !days.length || !sites.length) return { byDate, errors, details };
   const want = new Set(days);
   for (const site of sites) {
     try {
@@ -152,9 +152,10 @@ async function getRoster(token, userId, sitesMap, days) {
     } catch (e) {
       console.error('roster ' + site.name + ': ' + (e.message || e));
       errors.push(site.name);
+      details[site.name] = String(e.message || e).slice(0, 300);   // shown in the app so setup problems can be diagnosed
     }
   }
-  return { byDate, errors };
+  return { byDate, errors, details };
 }
 
 // One-line summary saved on timesheet rows, e.g. "Night 18:00–06:00 (BNE)".
