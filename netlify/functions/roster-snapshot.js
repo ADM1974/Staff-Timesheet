@@ -15,7 +15,7 @@
 // used only if Shifts insists on an MS-APP-ACTS-AS user for the scheduled run.
 // Schedule: netlify.toml [functions."roster-snapshot"] (hourly).
 
-const { getAppToken, getSitesMap, weekFor } = require('./staff');
+const { getAppToken, getSitesMap, weekFor, shiftKey } = require('./staff');
 
 const SNAP_LIST = 'RosterSnapshots';
 const DEFAULT_TZ = 'Australia/Brisbane';
@@ -192,6 +192,10 @@ async function getRoster(token, userId, sitesMap, days) {
   return { byDate, errors, details, shiftNames };
 }
 
+// The weekly allowance a rostered shift stands for (e.g. an "On call" shift → "Oncall"),
+// or '' if it's a normal work shift. siteAllow = getAllowancesBySite()[shift's site].
+function allowanceForShift(name, siteAllow) { return ((siteAllow || {}).weeklyShiftMap || {})[shiftKey(name)] || ''; }
+
 // One-line summary saved on timesheet rows, e.g. "Night 18:00–06:00 (BNE)".
 function rosterLabel(list) {
   return (list || []).map(x => `${x.name} ${x.start}–${x.end} (${x.site})`).join('; ');
@@ -220,4 +224,5 @@ exports.handler = async () => {
 };
 
 exports.getRoster = getRoster;
+exports.allowanceForShift = allowanceForShift;
 exports.rosterLabel = rosterLabel;

@@ -68,6 +68,13 @@
   .allow-h{font-size:10px;font-weight:700;letter-spacing:.4px;color:var(--muted);text-transform:uppercase;margin-bottom:4px;}
   .achk{display:flex;align-items:center;gap:9px;font-size:14px;padding:6px 0;color:var(--ink);cursor:pointer;}
   .achk input{width:18px;height:18px;flex:0 0 auto;margin:0;}
+  .msel-btn{position:relative;width:100%;text-align:left;border:1px solid var(--line);border-radius:8px;padding:9px 30px 9px 10px;font:inherit;font-size:14px;background:var(--card);color:var(--ink);cursor:pointer;}
+  .msel-btn::after{content:'▾';position:absolute;right:11px;top:50%;transform:translateY(-50%);color:var(--muted);}
+  .msel-btn.empty{color:var(--muted);}
+  .msel-panel{margin-top:4px;border:1px solid var(--line);border-radius:8px;padding:2px 10px;background:var(--card);}
+  .msel-note{font-size:11px;color:var(--muted);margin-top:4px;}
+  .co{display:inline-flex;align-items:center;gap:7px;font-size:13px;margin-top:7px;color:var(--ink);cursor:pointer;}
+  .co input{width:17px;height:17px;margin:0;}
   .shift{background:#f3f7fc;border:1px solid #d6e4f5;border-radius:9px;padding:8px 10px;margin-bottom:9px;font-size:13px;}
   .shift .ros{color:var(--ink);} .shift .ros b{color:var(--brand-dark);}
   .shift .fixed{font-size:10.5px;color:var(--muted);}
@@ -118,7 +125,7 @@
 <script>
 let WORKORDERS = [];   // per-site, loaded from the WorkOrders SharePoint list on each week load
 let msalInstance=null, account=null, WEEK=null, SITES=[], ALLOWANCES_BY_SITE={}, WEEKLY_OPTIONS=[], WEEK_ALLOWANCES=[], userName='there', userEmail='';
-let ROSTER_SITES=[], ROSTER_ERRORS=[], ROSTER_ERR_DETAIL={}, ROSTER_SHIFT_NAMES={};   // sites linked to Teams Shifts; any whose roster couldn't be read
+let ROSTER_SITES=[], ROSTER_ERRORS=[], ROSTER_ERR_DETAIL={}, ROSTER_SHIFT_NAMES={}, ROSTER_WEEK_ALLOW=[];   // sites linked to Teams Shifts; any whose roster couldn't be read
 const SCOPES=['openid','profile','email'];
 
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2800);}
@@ -215,13 +222,14 @@ async function loadWeek(){
     WORKORDERS=data.workOrders||[];
     WEEKLY_OPTIONS=data.weeklyOptions||[];
     WEEK_ALLOWANCES=(data.weekAllowances||[]).slice();
-    ROSTER_SITES=data.rosterSites||[]; ROSTER_ERRORS=data.rosterErrors||[]; ROSTER_ERR_DETAIL=data.rosterErrorDetail||{}; ROSTER_SHIFT_NAMES=data.rosterShiftNames||{};
+    ROSTER_SITES=data.rosterSites||[]; ROSTER_ERRORS=data.rosterErrors||[]; ROSTER_ERR_DETAIL=data.rosterErrorDetail||{}; ROSTER_SHIFT_NAMES=data.rosterShiftNames||{}; ROSTER_WEEK_ALLOW=(data.rosterWeekAllowances||[]).filter(a=>WEEKLY_OPTIONS.includes(a));
+    if(!data.weekSaved) for(const a of ROSTER_WEEK_ALLOW) if(!WEEK_ALLOWANCES.includes(a)) WEEK_ALLOWANCES.push(a);   // rostered On call → ticked (until the week is saved)
     WEEK={ weekStart:data.weekStart, weekEnd:data.weekEnd, closeDayName:data.closeDayName, homeSite:data.homeSite||'',
       rejected:!!data.rejected, rejectionReason:data.rejectionReason||'',
       days:(data.days||[]).map(d=>({ date:d.date, site:d.site||data.homeSite||'',
-        lines:(d.lines||[]).map(l=>({wo:String(l.wo||''),hr:(l.hr!=null?String(l.hr):''),comment:String(l.comment||'')})),
+        lines:(d.lines||[]).map(l=>({wo:String(l.wo||''),hr:(l.hr!=null?String(l.hr):''),comment:String(l.comment||''),co:!!l.co})),
         allowances:(d.allowances||[]).slice(),
-        rostered:(d.rostered||[]), shiftWorked:String(d.shiftWorked||'') })) };
+        rostered:(d.rostered||[]), rosterAllow:(d.rosterAllowances||[]), shiftWorked:String(d.shiftWorked||'') })) };
     // Days not saved yet start from the week's (fixed) roster: its site, shift and matching allowances.
     // Saved days keep exactly what the person entered.
     (data.days||[]).forEach((d,di)=>{ const r=(d.rostered||[])[0]; if(d.saved || !r) return;
@@ -246,7 +254,8 @@ function lineHtml(di,li,l){
     </div>
     <input inputmode="text" placeholder="Comment / description (optional)…" value="${esc(l.comment||'')}"
       oninput="WEEK.days[${di}].lines[${li}].comment=this.value"
-      style="width:100%;box-sizing:border-box;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13.5px;font-family:inherit;"></div>`;
+      style="width:100%;box-sizing:border-box;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13.5px;font-family:inherit;">
+    <label class="co"><input type="checkbox" ${l.co?'checked':''} onchange="WEEK.days[${di}].lines[${li}].co=this.checked"> Call-out job</label></div>`;
 }
 function renderWeek(){
   const rejectBanner = WEEK.rejected
@@ -279,8 +288,23 @@ function allowHtml(di,d){
   const opts=siteDailyOpts(d.site,d.date);
   d.allowances=(d.allowances||[]).filter(a=>opts.includes(a));   // drop any ticked on a day it no longer applies
   if(!d.site || !opts.length) return '';
-  const chks=opts.map(a=>`<label class="achk"><input type="checkbox" ${d.allowances.includes(a)?'checked':''} onchange="toggleAllow(${di},'${a.replace(/'/g,"\\'")}',this.checked)"> ${esc(a)}</label>`).join('');
-  return `<div class="allow"><div class="allow-h">Allowances</div>${chks}</div>`;
+  return `<div class="allow"><div class="allow-h">Allowances</div>${mselHtml('d'+di,opts,d.allowances,`toggleAllow(${di},`)}</div>`;
+}
+// Multi-select dropdown: a button showing what's ticked; tap it to open the tick list.
+// call = the start of the toggle call, e.g. "toggleAllow(3," — the name and on/off are appended.
+let OPEN_MSEL='';                                   // which picker is open ('w' = weekly, 'd3' = day 3)
+const MSEL_NONE='None — tap to add';
+function mselHtml(key,opts,chosen,call){
+  const q=a=>h(String(a).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
+  const rows=opts.map(a=>`<label class="achk"><input type="checkbox" ${chosen.includes(a)?'checked':''} onchange="${call}'${q(a)}',this.checked);mselLabel('${key}')"> ${h(a)}</label>`).join('');
+  return `<button type="button" class="msel-btn${chosen.length?'':' empty'}" id="msb${key}" onclick="toggleMsel('${key}')">${chosen.length?h(chosen.join(', ')):MSEL_NONE}</button>
+    <div class="msel-panel" id="msp${key}" ${OPEN_MSEL===key?'':'hidden'}>${rows}</div>`;
+}
+function toggleMsel(key){ OPEN_MSEL=OPEN_MSEL===key?'':key; document.querySelectorAll('.msel-panel').forEach(p=>p.hidden=(p.id!=='msp'+OPEN_MSEL)); }
+function mselLabel(key){
+  const p=document.getElementById('msp'+key), b=document.getElementById('msb'+key); if(!p||!b) return;
+  const on=[...p.querySelectorAll('input:checked')].map(i=>i.parentNode.textContent.trim());
+  b.textContent=on.length?on.join(', '):MSEL_NONE; b.classList.toggle('empty',!on.length);
 }
 /* ---- Teams Shifts: rostered shift (fixed at the start of the week) + the shift actually worked ---- */
 function h(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }   // shift names come from Teams
@@ -297,10 +321,11 @@ function shiftHtml(di,d){
   const ros=d.rostered.length ? `<div class="ros">📅 Rostered: ${rosterText(d.rostered)}</div><div class="fixed">Roster as at the start of the week — change “Shift worked” if you worked something different.</div>`
           : unreadable ? `<div class="ros">📅 Roster unavailable — pick the shift you worked.</div>`
           : linked ? `<div class="ros">📅 Not rostered this day</div>` : '';
+  const onc=(d.rosterAllow||[]).length?`<div class="ros">📟 Also rostered: <b>${h(d.rosterAllow.join(', '))}</b> (allowance)</div>`:'';
   const opts=`<option value="" ${d.shiftWorked?'':'selected'}>— no shift / not working —</option>`+choices.map(n=>`<option ${n===d.shiftWorked?'selected':''}>${h(n)}</option>`).join('');
   const rosName=(d.rostered[0]||{}).name||'';
   const diff=linked && (d.shiftWorked||rosName) && d.shiftWorked.toLowerCase()!==rosName.toLowerCase() ? `<div class="diff">⚠ Different from the roster — your supervisor will see this.</div>` : '';
-  return `<div class="shift">${ros}<label>Shift worked <select onchange="setShift(${di},this.value)">${opts}</select></label>${diff}</div>`;
+  return `<div class="shift">${ros}${onc}<label>Shift worked <select onchange="setShift(${di},this.value)">${opts}</select></label>${diff}</div>`;
 }
 // Switch a day's shift: untick the allowances the old shift brought in, tick the new shift's
 // (only those valid for the day's site and weekday). Anything ticked by hand is left alone.
@@ -315,8 +340,8 @@ function setShift(di,name){ const d=WEEK.days[di]; applyShift(d,d.shiftWorked,na
 function toggleAllow(di,name,on){ const arr=WEEK.days[di].allowances; const i=arr.indexOf(name); if(on&&i<0)arr.push(name); else if(!on&&i>=0)arr.splice(i,1); }
 function weekAllowHtml(){
   if(!WEEKLY_OPTIONS.length) return '';
-  const chks=WEEKLY_OPTIONS.map(a=>`<label class="achk"><input type="checkbox" ${WEEK_ALLOWANCES.includes(a)?'checked':''} onchange="toggleWeekAllow('${a.replace(/'/g,"\\'")}',this.checked)"> ${esc(a)}</label>`).join('');
-  return `<div class="day"><div class="allow-h" style="margin-bottom:6px">Weekly allowances</div>${chks}</div>`;
+  const fromRoster=ROSTER_WEEK_ALLOW.length?`<div class="msel-note">📟 Rostered in Teams: ${h(ROSTER_WEEK_ALLOW.join(', '))} — untick if you weren’t on call.</div>`:'';
+  return `<div class="day"><div class="allow-h" style="margin-bottom:6px">Weekly allowances</div>${mselHtml('w',WEEKLY_OPTIONS,WEEK_ALLOWANCES,'toggleWeekAllow(')}${fromRoster}</div>`;
 }
 function toggleWeekAllow(name,on){ const i=WEEK_ALLOWANCES.indexOf(name); if(on&&i<0)WEEK_ALLOWANCES.push(name); else if(!on&&i>=0)WEEK_ALLOWANCES.splice(i,1); }
 function addLine(di){ WEEK.days[di].lines.push({wo:'',hr:'',comment:''}); renderWeek(); }
@@ -335,7 +360,7 @@ function pick(di,li,wo){ WEEK.days[di].lines[li].wo=wo; renderWeek(); }
 
 async function submitWeek(){
   const days=WEEK.days.map(d=>({ date:d.date, site:d.site,
-    lines:d.lines.filter(l=>l.wo.trim()&&parseFloat(l.hr)>0).map(l=>({wo:l.wo.trim(),hr:parseFloat(l.hr),comment:String(l.comment||'').trim().slice(0,500)})),
+    lines:d.lines.filter(l=>l.wo.trim()&&parseFloat(l.hr)>0).map(l=>({wo:l.wo.trim(),hr:parseFloat(l.hr),comment:String(l.comment||'').trim().slice(0,500),co:!!l.co})),
     allowances:(d.allowances||[]), shiftWorked:d.shiftWorked||'' }))
     .filter(d=>d.site && (d.lines.length || d.allowances.length));
   const noHours=days.filter(d=>!d.lines.length && d.allowances.length).map(d=>`${dayLabel(d.date)}: ${d.allowances.join(', ')}`);
@@ -382,7 +407,7 @@ function tickCountdown(){
 setInterval(tickCountdown,30000);
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='24.4';
+const APP_VERSION='25';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){

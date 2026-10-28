@@ -84,6 +84,16 @@ the week; staff fix differences themselves with **Shift worked**. If a week has 
 deploy, a missed run), the first person to open the app takes it, and that becomes the week's roster.
 Only **published** (shared) shifts count, on the day each shift **starts**.
 
+**On call is an allowance, not a shift.** A Teams shift whose name matches a **Weekly** allowance
+(its title, or a label in its `ShiftName` — compared ignoring case, spaces and hyphens, so
+"On Call" = "Oncall") ticks that weekly allowance (until the week is first saved) and is shown on
+the day as "Also rostered: Oncall (allowance)". It is never the rostered/worked shift and isn't
+offered in **Shift worked**. Staff can untick or tick it themselves.
+
+**Call-out jobs:** each work-order line has a **Call-out job** tick, saved as `Callout = Yes` on
+that row (Timesheets → **Callout**, single line of text; until the column exists the app saves
+without it).
+
 Each saved row records **ShiftWorked** (what they say they worked) and **RosteredShift** (the
 week's roster for that day, e.g. `Night 18:00–06:00 (BNE)`), so a supervisor can spot differences.
 
@@ -92,11 +102,12 @@ week's roster for that day, e.g. `Night 18:00–06:00 (BNE)`), so a supervisor c
    → API permissions → Microsoft Graph → **Application** → `Schedule.Read.All` → **Grant admin consent**.
 2. **Sites list:** add **ShiftsTeamId** (single line of text); on the site's row put its Team id —
    BNE = `2d11d80c-1357-4fb5-9325-d5646295c102` (AEL AU - BNE). Leave blank for unlinked sites.
-3. **Timesheets list:** add **ShiftWorked** and **RosteredShift** (single line of text). Until they
+3. **Timesheets list:** add **ShiftWorked**, **RosteredShift** and **Callout** (single line of text). Until they
    exist the app still saves, just without them.
 4. **RosterSnapshots list:** created automatically on first run. If the app isn't allowed to create
-   lists, create it yourself: columns **Site**, **WeekStart**, **TakenAt** (single line of text) and
-   **Data** (multiple lines of text, plain). Don't edit **Data** by hand.
+   lists, create it yourself. Only **Data** (multiple lines of text, plain) is required — each row is
+   keyed by its Title ("BNE 2026-10-28"); **Site**, **WeekStart**, **TakenAt** (single line of text)
+   are filled in if present. Don't edit **Data** by hand; delete a row to re-capture that week.
 5. Optional: Allowances → **ShiftName** for shift labels that differ from the allowance name.
 6. If the hourly run's log (Netlify → Logs → Functions → roster-snapshot) shows Shifts refusing an
    app-only call without a user, set env **SHIFTS_ACT_AS** to a Team owner's Entra object id.

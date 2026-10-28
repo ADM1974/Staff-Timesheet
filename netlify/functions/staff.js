@@ -164,7 +164,13 @@ function allowedOnDate(daysMap, title, date) {
   return !days || days.includes(new Date(String(date).slice(0, 10) + 'T00:00:00Z').getUTCDay());
 }
 
-// All active allowances grouped by site name → { daily:[], weekly:[], days:{}, shiftMap:{}, shiftNames:[] }.
+// Shift/allowance names compared loosely: "On Call", "on-call" and "Oncall" all match.
+const shiftKey = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// All active allowances grouped by site name → { daily:[], weekly:[], days:{}, shiftMap:{}, shiftNames:[], weeklyShiftMap:{} }.
+// weeklyShiftMap = { shiftKey(label): weekly allowance title } — a Teams shift with one of
+// these names is an ALLOWANCE (e.g. On call), not the shift worked. Labels = the
+// allowance's title plus anything in its ShiftName column.
 // days = { title: [weekday idx] } for daily allowances limited to certain days.
 // shiftMap = { lower-case Shifts label: [daily allowance titles] } — a shift pre-ticks
 // these. Labels come from the optional "ShiftName" column ("Night" or "Night, Late");
@@ -183,10 +189,14 @@ async function getAllowancesBySite(token, sitesMap) {
     const siteName = f.SiteLookupId != null ? sitesMap.byId[String(f.SiteLookupId)] : '';
     const title = String(f.Title || '').trim();
     if (!siteName || !title) continue;
-    const bucket = (out[siteName] = out[siteName] || { daily: [], weekly: [], days: {}, shiftMap: {}, shiftNames: [] });
-    if (String(f.Frequency || 'Daily').trim().toLowerCase() === 'weekly') { if (!bucket.weekly.includes(title)) bucket.weekly.push(title); continue; }
-    if (!bucket.daily.includes(title)) bucket.daily.push(title);
+    const bucket = (out[siteName] = out[siteName] || { daily: [], weekly: [], days: {}, shiftMap: {}, shiftNames: [], weeklyShiftMap: {} });
     const labels = String(f.ShiftName || '').split(/[,;]/).map(x => x.trim()).filter(Boolean);
+    if (String(f.Frequency || 'Daily').trim().toLowerCase() === 'weekly') {
+      if (!bucket.weekly.includes(title)) bucket.weekly.push(title);
+      for (const lab of [...labels, title]) if (shiftKey(lab)) bucket.weeklyShiftMap[shiftKey(lab)] = title;
+      continue;
+    }
+    if (!bucket.daily.includes(title)) bucket.daily.push(title);
     for (const lab of labels) if (!bucket.shiftNames.includes(lab)) bucket.shiftNames.push(lab);
     for (const lab of [...labels, title]) {
       const k = lab.toLowerCase();
@@ -318,7 +328,7 @@ async function deleteItem(token, id) {
 // SharePoint rejects the row (400), retry without the shift columns, then also
 // without Comment. `state` (shared across one save) remembers which columns were
 // missing so later rows skip them straight away.
-const OPTIONAL_GROUPS = [['ShiftWorked', 'RosteredShift'], ['Comment']];
+const OPTIONAL_GROUPS = [['ShiftWorked', 'RosteredShift'], ['Callout'], ['Comment']];
 async function createItemResilient(token, fields, state) {
   const missing = (state.missing = state.missing || new Set());
   const f = { ...fields };
@@ -327,7 +337,8 @@ async function createItemResilient(token, fields, state) {
     try { await createItem(token, f); return; }
     catch (e) {
       if (!/^graph create 400\b/.test(String(e.message))) throw e;   // only a rejected row is worth retrying
-      const group = OPTIONAL_GROUPS.find(g => g.some(k => k in f));
+      const named = (/Field '([^']+)' is not recognized/i.exec(String(e.message)) || [])[1];   // SharePoint names the missing column
+      const group = (named && OPTIONAL_GROUPS.find(g => g.includes(named) && g.some(k => k in f))) || OPTIONAL_GROUPS.find(g => g.some(k => k in f));
       if (!group) throw e;
       for (const k of group) { delete f[k]; missing.add(k); }
     }
@@ -346,6 +357,7 @@ exports.getAppToken = getAppToken;
 exports.validateStaffToken = validateStaffToken;
 exports.getActiveSites = getActiveSites;
 exports.getUserRows = getUserRows;
+exports.shiftKey = shiftKey;
 exports.getSitesMap = getSitesMap;
 exports.getHomeSite = getHomeSite;
 exports.getAllowancesBySite = getAllowancesBySite;

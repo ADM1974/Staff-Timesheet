@@ -2,7 +2,7 @@
 // open week (delete + rewrite). Week boundary is the home site's; hours are per
 // the day's chosen site; allowances are validated against that day's site.
 const { getAppToken, validateStaffToken, getActiveSites, getSitesMap, getHomeSite, getAllowancesBySite, allowedOnDate, weekContext, getUserEntries, getRejectedWeek, createItemResilient, deleteItem } = require('./staff');
-const { getRoster, rosterLabel } = require('./roster-snapshot');
+const { getRoster, rosterLabel, allowanceForShift } = require('./roster-snapshot');
 
 exports.handler = async (event) => {
   const headers = { 'Content-Type': 'application/json' };
@@ -37,7 +37,7 @@ exports.handler = async (event) => {
       if (!site) continue;
       if (!activeSites.has(site)) return bad('Unknown or inactive site: ' + site);
       const lines = (Array.isArray(day.lines) ? day.lines : [])
-        .map(l => ({ wo: String(l.wo || '').trim().slice(0, 200), hr: parseFloat(l.hr), comment: String(l.comment || '').trim().slice(0, 500) }))
+        .map(l => ({ wo: String(l.wo || '').trim().slice(0, 200), hr: parseFloat(l.hr), comment: String(l.comment || '').trim().slice(0, 500), co: l.co === true }))
         .filter(l => l.wo && l.hr > 0 && l.hr <= 24);
       const siteAllow = allowancesBySite[site] || {};
       const dailyOpts = new Set(siteAllow.daily || []);
@@ -46,7 +46,8 @@ exports.handler = async (event) => {
         .filter(a => dailyOpts.has(a) && allowedOnDate(siteAllow.days, a, date));   // daily allowances for the day's site, on their allowed days
       if (!lines.length && !allowances.length) continue;
       const shiftWorked = String(day.shiftWorked || '').trim().slice(0, 100);
-      clean.push({ date, site, lines, allowances, shiftWorked, rosteredShift: rosterLabel(roster.byDate[date]).slice(0, 255) });
+      const workShifts = (roster.byDate[date] || []).filter(x => !allowanceForShift(x.name, allowancesBySite[x.site]));   // On call etc. are allowances, not the shift
+      clean.push({ date, site, lines, allowances, shiftWorked, rosteredShift: rosterLabel(workShifts).slice(0, 255) });
     }
     const weekAllowances = (Array.isArray(data.weekAllowances) ? data.weekAllowances : [])
       .map(a => String(a || '').trim())
@@ -69,7 +70,8 @@ exports.handler = async (event) => {
           Notes: 'Staff app · ' + user.email, ...shiftCols,
         };
         if (l.comment) fields.Comment = l.comment;
-        await createItemResilient(token, fields, cols);   // Comment / shift columns may not exist yet
+        if (l.co) fields.Callout = 'Yes';                 // this job was a call-out
+        await createItemResilient(token, fields, cols);   // Comment / Callout / shift columns may not exist yet
         created++;
       }
       for (const a of day.allowances) {
