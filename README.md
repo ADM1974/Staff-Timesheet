@@ -91,7 +91,7 @@ the day as "Also rostered: Oncall (allowance)". It is never the rostered/worked 
 offered in **Shift worked**. Staff can untick or tick it themselves.
 
 **Per-job allowances (v27):** any Allowances row with **Frequency = `Per job`** (e.g. `Call-out`
-for an on-call call-out that costs extra, `Call-out – on site` for one taken while already on site)
+for an on-call call-out that costs extra, `Call-Out - Working Hours` for one taken while already on site during working hours)
 becomes a tick on every work-order line for that site. Ticks are saved on the row as
 **JobAllowances** (Timesheets, single line of text, comma-separated); if that column is missing the
 week still saves and the person is told the ticks weren't kept. Rows saved before v27 used

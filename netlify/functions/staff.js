@@ -173,7 +173,7 @@ function allowedOnDate(daysMap, title, date) {
 const shiftKey = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 // All active allowances grouped by site name → { daily:[], weekly:[], perJob:[], days:{}, shiftMap:{}, shiftNames:[], weeklyShiftMap:{} }.
-// perJob = allowances with Frequency "Per job" (e.g. Call-out, Call-out – on site): ticked
+// perJob = allowances with Frequency "Per job" (e.g. Call-out, Call-Out - Working Hours): ticked
 // against a single work-order line rather than the day or the week.
 // weeklyShiftMap = { shiftKey(label): weekly allowance title } — a Teams shift with one of
 // these names is an ALLOWANCE (e.g. On call), not the shift worked. Labels = the

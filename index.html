@@ -266,7 +266,7 @@ function lineHtml(di,li,l){
       style="width:100%;box-sizing:border-box;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13.5px;font-family:inherit;">
     ${jobsHtml(di,li,l)}</div>`;
 }
-// Per-job allowances (Allowances list, Frequency "Per job" — e.g. Call-out, Call-out – on site)
+// Per-job allowances (Allowances list, Frequency "Per job" — e.g. Call-out, Call-Out - Working Hours)
 // for the day's site: a tick for each, against this work order.
 function jobsHtml(di,li,l){
   const opts=(ALLOWANCES_BY_SITE[WEEK.days[di].site]||{}).perJob||[];
