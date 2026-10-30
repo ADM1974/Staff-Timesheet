@@ -65,11 +65,12 @@ exports.handler = async (event) => {
         if (weeklySet.has(a)) { if (!weekAllowances.includes(a)) weekAllowances.push(a); }
         else dd.allowances.push(a);
       } else {
-        // Per-job allowances (JobAllowances). Rows saved before v27 have Callout = Yes instead.
+        // Per-job allowances (JobAllowances). Rows saved before v27 have Callout = Yes instead;
+        // those were all taken during working hours, so they read as "Call-Out - Working Hours".
         let jobs = String(f.JobAllowances || '').split(/[;,]/).map(x => x.trim()).filter(Boolean);
         if (!jobs.length && (f.Callout === true || /^(yes|true|1)$/i.test(String(f.Callout || '')))) {
-          const co = (((allowancesBySite[String(f.Site || '').trim()] || {}).perJob) || []).find(a => shiftKey(a) === 'callout');
-          jobs = [co || 'Call-out'];
+          const co = (((allowancesBySite[String(f.Site || '').trim()] || {}).perJob) || []).find(a => shiftKey(a) === 'calloutworkinghours');
+          jobs = [co || 'Call-Out - Working Hours'];
         }
         dd.lines.push({ wo: String(f.WorkOrder || ''), hr: Number(f.Hours) || 0, comment: String(f.Comment || ''), jobs });
       }
