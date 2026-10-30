@@ -79,6 +79,10 @@
   .jobs{margin-top:7px;}
   .co{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--ink);cursor:pointer;}
   .co input{width:17px;height:17px;margin:0;}
+  .tabs{display:flex;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:calc(env(safe-area-inset-top) + 49px);z-index:19;}
+  .tabs button{flex:1;background:none;border:none;border-bottom:3px solid transparent;padding:11px 0 9px;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;}
+  .tabs button.on{color:var(--brand-dark);border-bottom-color:var(--brand);}
+  .lvday{background:#e9f5ee;border:1px solid #b9dfc8;color:#0f5a32;border-radius:9px;padding:7px 10px;margin-bottom:9px;font-size:13px;font-weight:600;}
   .phol{background:#fff6e0;border:1px solid #f1d58a;color:#7a5600;border-radius:9px;padding:7px 10px;margin-bottom:9px;font-size:13px;font-weight:600;}
   .overnote{font-size:12.5px;font-weight:600;color:var(--amber);text-align:right;margin:0 2px 6px;}
   .shift{background:#f3f7fc;border:1px solid #d6e4f5;border-radius:9px;padding:8px 10px;margin-bottom:9px;font-size:13px;}
@@ -97,6 +101,8 @@
     <span class="user hidden" id="who" onclick="signOut()">Sign out</span>
   </div>
   <div id="cdbar" style="display:none;background:#2b2f36;color:#fff;text-align:center;font-size:12.5px;padding:6px 10px;letter-spacing:.3px">⏱ Timesheets emailed to payroll in <b id="cdval" style="font-variant-numeric:tabular-nums">—</b></div>
+
+  <div class="tabs hidden" id="tabs"><button class="on" id="tabWeek" onclick="showTab('week')">Timesheet</button><button id="tabLeave" onclick="showTab('leave')">Leave</button></div>
 
   <!-- ===== SIGN IN ===== -->
   <div class="body" id="gateBody">
@@ -125,14 +131,19 @@
     <div class="foot" style="text-align:center;margin-top:14px"><a href="guide.html" style="color:var(--brand-dark);font-weight:600;text-decoration:none;font-size:12.5px">How to use this app →</a></div>
   </div>
 
+  <!-- ===== LEAVE (only when switched on — see leave-core.js) ===== -->
+  <div class="body hidden" id="leaveView"></div>
+
   <div class="toast" id="toast"></div>
   <div class="verbadge" id="verbadge"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.27.0/lib/msal-browser.min.js"></script>
 <script src="config.js"></script>
+<script src="leave-ui.js"></script>
 <script>
 let WORKORDERS = [];   // per-site, loaded from the WorkOrders SharePoint list on each week load
 let msalInstance=null, account=null, WEEK=null, SITES=[], ALLOWANCES_BY_SITE={}, WEEKLY_OPTIONS=[], WEEK_ALLOWANCES=[], userName='there', userEmail='';
+let LEAVE={}, LEAVE_UI=null;   // {date:{type,hours}} approved leave this week; the Leave tab once opened
 let HOLIDAYS={}, CONTRACT_HRS=0;   // {site:{date:name}} public holidays; weekly contract hours (Workers.ContractHours, 0 = not set)
 let ROSTER_SITES=[], ROSTER_ERRORS=[], ROSTER_ERR_DETAIL={}, ROSTER_SHIFT_NAMES={}, ROSTER_WEEK_ALLOW=[];   // sites linked to Teams Shifts; any whose roster couldn't be read
 const SCOPES=['openid','profile','email'];
@@ -216,6 +227,21 @@ function afterSignIn(){
   document.getElementById('weekView').classList.remove('hidden');
   const chip=document.getElementById('who'); chip.classList.remove('hidden'); chip.textContent=firstName(userName)+' · Sign out';
   loadWeek();
+  checkLeave();
+}
+
+/* ---------- leave (a tab, shown only when switched on) ---------- */
+const leaveCall=async body=>(await api('/.netlify/functions/leave',body)).json();
+async function checkLeave(){
+  try{ const d=await leaveCall({action:'init'}); if(d.ok && d.on) document.getElementById('tabs').classList.remove('hidden'); }catch(_){}
+}
+function showTab(t){
+  document.getElementById('tabWeek').classList.toggle('on',t==='week');
+  document.getElementById('tabLeave').classList.toggle('on',t==='leave');
+  document.getElementById('weekView').classList.toggle('hidden',t!=='week');
+  document.getElementById('leaveView').classList.toggle('hidden',t!=='leave');
+  if(t==='leave'){ if(LEAVE_UI) LEAVE_UI.reload(); else LEAVE_UI=LeaveUI.mount(document.getElementById('leaveView'),leaveCall,{hours:true}); }
+  window.scrollTo(0,0);   // (the timesheet keeps whatever was typed — no reload)
 }
 
 /* ---------- weekly timesheet ---------- */
@@ -231,7 +257,7 @@ async function loadWeek(){
     WORKORDERS=data.workOrders||[];
     WEEKLY_OPTIONS=data.weeklyOptions||[];
     WEEK_ALLOWANCES=(data.weekAllowances||[]).slice();
-    HOLIDAYS=data.holidays||{}; CONTRACT_HRS=Number(data.contractHours)||0;
+    HOLIDAYS=data.holidays||{}; CONTRACT_HRS=Number(data.contractHours)||0; LEAVE=data.leave||{};
     ROSTER_SITES=data.rosterSites||[]; ROSTER_ERRORS=data.rosterErrors||[]; ROSTER_ERR_DETAIL=data.rosterErrorDetail||{}; ROSTER_SHIFT_NAMES=data.rosterShiftNames||{}; ROSTER_WEEK_ALLOW=(data.rosterWeekAllowances||[]).filter(a=>WEEKLY_OPTIONS.includes(a));
     if(!data.weekSaved) for(const a of ROSTER_WEEK_ALLOW) if(!WEEK_ALLOWANCES.includes(a)) WEEK_ALLOWANCES.push(a);   // rostered On call → ticked (until the week is saved)
     WEEK={ weekStart:data.weekStart, weekEnd:data.weekEnd, closeDayName:data.closeDayName, homeSite:data.homeSite||'',
@@ -297,6 +323,7 @@ function renderWeek(){
     return `<div class="day">
       <div class="dayhd"><span class="dayname">${dayLabel(d.date)}</span><span class="daytot" id="dt${di}">${tot}h</span></div>
       ${holidayName(d)?`<div class="phol">🎉 Public holiday — ${h(holidayName(d))}</div>`:''}
+      ${LEAVE[d.date]?`<div class="lvday">🏖 ${h(LEAVE[d.date].type)}${LEAVE[d.date].hours?` — ${LEAVE[d.date].hours} h`:''} (approved leave)</div>`:''}
       ${shiftHtml(di,d)}
       <div id="dl${di}">${d.lines.map((l,li)=>lineHtml(di,li,l)).join('')}</div>
       <button type="button" class="addline" onclick="addLine(${di})">+ add work order and description</button>
@@ -374,7 +401,9 @@ function delLine(di,li){ WEEK.days[di].lines.splice(li,1); renderWeek(); }
 function dayTot(di){ const el=document.getElementById('dt'+di); if(el) el.textContent=WEEK.days[di].lines.reduce((s,l)=>s+(parseFloat(l.hr)||0),0).toFixed(1)+'h'; }
 function calcWeekTotal(){
   let t=0; for(const d of WEEK.days) for(const l of d.lines) t+=parseFloat(l.hr)||0;
-  document.getElementById('weekTotal').textContent=t.toFixed(1)+' h'+(CONTRACT_HRS?` of ${CONTRACT_HRS} h`:'');
+  const lv=Object.values(LEAVE).reduce((s,x)=>s+(Number(x.hours)||0),0);
+  document.getElementById('weekTotal').textContent=t.toFixed(1)+' h'+(lv?` + ${lv.toFixed(1)} h leave`:'')+(CONTRACT_HRS?` of ${CONTRACT_HRS} h`:'');
+  t+=lv;
   const over=CONTRACT_HRS?Math.round((t-CONTRACT_HRS)*100)/100:0;
   document.getElementById('overNote').textContent=over>0?`⚠ ${over.toFixed(1)} h over your ${CONTRACT_HRS} h contract — your senior approver will need to OK the week.`:'';
 }
@@ -457,7 +486,7 @@ function tickCountdown(){
 setInterval(tickCountdown,30000);
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='27.4';
+const APP_VERSION='28';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){

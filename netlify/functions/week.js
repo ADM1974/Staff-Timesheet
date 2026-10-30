@@ -5,6 +5,20 @@
 const { getAppToken, validateStaffToken, getSitesMap, getWorkerInfo, getAllowancesBySite, weekContext, getUserEntries, getUserRows, getWorkOrders, getRejectedWeek, shiftKey } = require('./staff');
 const { getRoster, allowanceForShift } = require('./roster-snapshot');
 const { holidaysBySite } = require('./holidays');
+const L = require('./leave-core');
+
+// Approved leave on the days of this week → { date: { type, hours } } ({} if leave is switched off).
+async function weekLeave(token, user, from, to) {
+  const email = String(user.email || '').trim().toLowerCase();
+  if (!L.leaveOnFor(await L.leaveSwitch(token), email)) return {};
+  const { requests } = await L.getRequests(token);
+  const out = {};
+  for (const r of requests) {
+    if (!L.FINAL_OK.includes(r.status) || !(r.email === email || r.personId === user.id)) continue;
+    for (const d of L.daysOf(r)) if (d >= from && d <= to) out[d] = { type: r.type, hours: Number(r.dayHours[d]) || 0 };
+  }
+  return out;
+}
 
 exports.handler = async (event) => {
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
@@ -28,10 +42,11 @@ exports.handler = async (event) => {
     const weeklyOptions = ((allowancesBySite[homeSite] || {}).weekly) || []; // staff weekly = home site
     const weeklySet = new Set(weeklyOptions);
     const entries = await getUserEntries(token, user.id, active.weekStart, active.weekEnd, rows);
-    const [workOrders, roster, holidays] = await Promise.all([
+    const [workOrders, roster, holidays, leave] = await Promise.all([
       getWorkOrders(token, homeInfo.id, homeSite),                         // typeahead for the home site
       getRoster(token, user.id, sitesMap, active.days),                    // fixed at the start of each week
       holidaysBySite(token, sitesMap, active.weekStart, active.weekEnd).catch(() => ({})),   // {site:{date:name}}
+      weekLeave(token, user, active.weekStart, active.weekEnd).catch(e => { console.warn('week leave', e.message); return {}; }),
     ]);
 
     // Split the roster: work shifts vs shifts that stand for a weekly allowance (On call).
@@ -87,7 +102,7 @@ exports.handler = async (event) => {
       rosterAllowances: allowRoster[date] || [],
     }));
 
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, name: user.name, homeSite, contractHours, holidays, closeDayName: wk.closeDayName, weekStart: active.weekStart, weekEnd: active.weekEnd, sites, allowancesBySite, weeklyOptions, workOrders, weekAllowances, days, rosterSites: Object.values(sitesMap.byName).filter(x => x.shiftsTeamId).map(x => x.name), rosterErrors: roster.errors, rosterErrorDetail: roster.details || {}, rosterShiftNames, rosterWeekAllowances, weekSaved: entries.length > 0, rejected: !!rejected, rejectionReason: rejected ? rejected.reason : '' }) };
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, name: user.name, homeSite, contractHours, holidays, leave, closeDayName: wk.closeDayName, weekStart: active.weekStart, weekEnd: active.weekEnd, sites, allowancesBySite, weeklyOptions, workOrders, weekAllowances, days, rosterSites: Object.values(sitesMap.byName).filter(x => x.shiftsTeamId).map(x => x.name), rosterErrors: roster.errors, rosterErrorDetail: roster.details || {}, rosterShiftNames, rosterWeekAllowances, weekSaved: entries.length > 0, rejected: !!rejected, rejectionReason: rejected ? rejected.reason : '' }) };
   } catch (err) {
     console.error(err);
     return { statusCode: 502, headers, body: '{"ok":false,"error":"server"}' };

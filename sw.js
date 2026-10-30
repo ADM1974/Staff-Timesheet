@@ -7,7 +7,7 @@
      the cache is only a fallback when there's no signal. This avoids the classic
      PWA trap where a cache-first shell serves an old form after a new deploy. */
 const CACHE = 'timesheet-shell-v2';
-const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png'];
+const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './leave-ui.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
