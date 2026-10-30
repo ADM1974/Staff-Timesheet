@@ -38,9 +38,11 @@ exports.handler = async (event) => {
       if (!site) continue;
       if (!activeSites.has(site)) return bad('Unknown or inactive site: ' + site);
       const lines = (Array.isArray(day.lines) ? day.lines : [])
-        .map(l => ({ wo: String(l.wo || '').trim().slice(0, 200), hr: parseFloat(l.hr), comment: String(l.comment || '').trim().slice(0, 500), co: l.co === true }))
+        .map(l => ({ wo: String(l.wo || '').trim().slice(0, 200), hr: parseFloat(l.hr), comment: String(l.comment || '').trim().slice(0, 500), jobs: Array.isArray(l.jobs) ? l.jobs.map(x => String(x || '').trim()) : [] }))
         .filter(l => l.wo && l.hr > 0 && l.hr <= 24);
       const siteAllow = allowancesBySite[site] || {};
+      const perJob = new Set(siteAllow.perJob || []);
+      for (const l of lines) l.jobs = [...new Set(l.jobs.filter(a => perJob.has(a)))];   // per-job allowances of the day's site
       const dailyOpts = new Set(siteAllow.daily || []);
       const allowances = (Array.isArray(day.allowances) ? day.allowances : [])
         .map(a => String(a || '').trim())
@@ -70,7 +72,7 @@ exports.handler = async (event) => {
           Notes: 'Staff app · ' + user.email, ...shiftCols,
         };
         if (l.comment) fields.Comment = l.comment;
-        if (l.co) fields.Callout = 'Yes';                 // this job was a call-out
+        if (l.jobs.length) fields.JobAllowances = l.jobs.join(', ').slice(0, 255);   // e.g. "Call-out"
         rows.push(fields);
       }
       for (const a of day.allowances) {
@@ -101,7 +103,7 @@ exports.handler = async (event) => {
     }
     await pool(existing, 4, it => deleteItem(token, it.id));
     const created = createdIds.length;
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, created, commentsShortened: cols.shortened || 0, commentsDropped: cols.dropped || 0, weekStart: wk.weekStart, weekEnd: wk.weekEnd }) };
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, created, commentsShortened: cols.shortened || 0, commentsDropped: cols.dropped || 0, jobsDropped: cols.jobsDropped || 0, weekStart: wk.weekStart, weekEnd: wk.weekEnd }) };
   } catch (err) {
     console.error(err);
     return { statusCode: 502, headers, body: JSON.stringify({ ok: false, error: 'server' }) };

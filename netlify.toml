@@ -11,6 +11,11 @@
 [functions."roster-snapshot"]
   schedule = "7 * * * *"
 
+# Hourly: public holidays → day notes on each Shifts-linked site's Teams schedule
+# (see netlify/functions/holiday-notes.js). Notes already there are left alone.
+[functions."holiday-notes"]
+  schedule = "23 * * * *"
+
 [[headers]]
   for = "/"
   [headers.values]

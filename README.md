@@ -90,9 +90,27 @@ Only **published** (shared) shifts count, on the day each shift **starts**.
 the day as "Also rostered: Oncall (allowance)". It is never the rostered/worked shift and isn't
 offered in **Shift worked**. Staff can untick or tick it themselves.
 
-**Call-out jobs:** each work-order line has a **Call-out job** tick, saved as `Callout = Yes` on
-that row (Timesheets → **Callout**, single line of text; until the column exists the app saves
-without it).
+**Per-job allowances (v27):** any Allowances row with **Frequency = `Per job`** (e.g. `Call-out`
+for an on-call call-out that costs extra, `Call-out – on site` for one taken while already on site)
+becomes a tick on every work-order line for that site. Ticks are saved on the row as
+**JobAllowances** (Timesheets, single line of text, comma-separated); if that column is missing the
+week still saves and the person is told the ticks weren't kept. Rows saved before v27 used
+`Callout = Yes` — still read as "Call-out".
+
+**Contract hours (v27):** Workers → optional **ContractHours** (number, hours per week). The week
+total shows "of 40 h" and warns when over. In the supervisor app a week over contract needs the
+site's **SeniorApprover** as well: the supervisor's Approve marks it "awaiting senior approval"
+(still Submitted, so not in payroll) and the senior approver's Approve approves it.
+
+**Public holidays (v27):** each day shows "Public holiday — <name>" for its site, and ticks the
+site's daily allowance whose name contains "Public holiday" (if there is one) on days not yet
+saved. Holidays come from date.nager.at by the Sites column **HolidayRegion** (`AU-QLD`, `AU-NSW`,
+`NZ-AUK`, or just `AU` / `NZ`); with no column it's guessed from the site code (BNE → AU-QLD,
+SYD/WSI → AU-NSW, AKL → NZ-AUK …). Extra local days go in an optional list **PublicHolidays**
+(Title = name, **HolidayDate** = date, **Region** = blank for all sites, or regions / site names).
+The hourly `holiday-notes` function adds each holiday for the next 120 days to every Shifts-linked
+site's Teams schedule as a day note — needs Graph **Schedule.ReadWrite.All** (Application, admin
+consent) on the `CLIENT_ID` app; until then it just logs a 403.
 
 Each saved row records **ShiftWorked** (what they say they worked) and **RosteredShift** (the
 week's roster for that day, e.g. `Night 18:00–06:00 (BNE)`), so a supervisor can spot differences.
@@ -102,7 +120,7 @@ week's roster for that day, e.g. `Night 18:00–06:00 (BNE)`), so a supervisor c
    → API permissions → Microsoft Graph → **Application** → `Schedule.Read.All` → **Grant admin consent**.
 2. **Sites list:** add **ShiftsTeamId** (single line of text); on the site's row put its Team id —
    BNE = `2d11d80c-1357-4fb5-9325-d5646295c102` (AEL AU - BNE). Leave blank for unlinked sites.
-3. **Timesheets list:** add **ShiftWorked**, **RosteredShift** and **Callout** (single line of text). Until they
+3. **Timesheets list:** add **ShiftWorked**, **RosteredShift** and **JobAllowances** (single line of text). Until they
    exist the app still saves, just without them.
 4. **RosterSnapshots list:** created automatically on first run. If the app isn't allowed to create
    lists, create it yourself. Only **Data** (multiple lines of text, plain) is required — each row is

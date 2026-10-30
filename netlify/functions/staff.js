@@ -92,7 +92,7 @@ async function getActiveSites(token) {
     .filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 
-// Sites list → { byName: {lowerName:{id,name,closeDayIndex,shiftsTeamId}}, byId: {id:name}, active: [names] }.
+// Sites list → { byName: {lowerName:{id,name,closeDayIndex,shiftsTeamId,holidayRegion}}, byId: {id:name}, active: [names] }.
 async function getSitesMap(token) {
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
   const list = await findList(token, 'sites');
@@ -107,7 +107,8 @@ async function getSitesMap(token) {
     if (f.Active !== false) active.push(name);
     const idx = WEEKDAYS.findIndex(d => d.toLowerCase() === String(f.CloseDay || '').trim().toLowerCase());
     const shiftsTeamId = String(f.ShiftsTeamId || '').trim();   // optional: Teams Shifts roster for this site
-    byName[name.toLowerCase()] = { id: it.id, name, closeDayIndex: idx < 0 ? 0 : idx, shiftsTeamId };
+    const holidayRegion = String(f.HolidayRegion || '').trim();  // optional: e.g. AU-QLD (see holidays.js)
+    byName[name.toLowerCase()] = { id: it.id, name, closeDayIndex: idx < 0 ? 0 : idx, shiftsTeamId, holidayRegion };
     byId[String(it.id)] = name;
   }
   active.sort((a, b) => a.localeCompare(b));
@@ -124,17 +125,19 @@ function emailFromName(name) {
   return (first && last) ? `${first}.${last}@ael.co` : '';
 }
 
-// The staff member's HOME site name, from the Workers list. A row matches the
-// signed-in email by EITHER an explicit "Email" column OR the email generated from
-// the worker's name (Title). Site may be plain text/choice or a Lookup.
-async function getHomeSite(token, email, sitesMap) {
+// The staff member's Workers row: HOME site name + weekly contract hours (optional
+// "ContractHours" number column; 0 = not set). A row matches the signed-in email by
+// EITHER an explicit "Email" column OR the email generated from the worker's name
+// (Title). Site may be plain text/choice or a Lookup.
+async function getWorkerInfo(token, email, sitesMap) {
+  const none = { homeSite: '', contractHours: 0 };
   const want = String(email || '').trim().toLowerCase();
-  if (!want) return '';
+  if (!want) return none;
   const base = `https://graph.microsoft.com/v1.0/sites/${process.env.SP_SITE_ID}`;
   const list = await findList(token, 'workers').catch(() => null);
-  if (!list) return '';
+  if (!list) return none;
   let r = await fetch(`${base}/lists/${list.id}/items?expand=fields&$top=999`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) return '';
+  if (!r.ok) return none;
   for (const it of ((await r.json()).value || [])) {
     const f = it.fields || {};
     const rowEmail = String(f.Email || '').trim().toLowerCase();
@@ -145,10 +148,12 @@ async function getHomeSite(token, email, sitesMap) {
       const lid = f.HomeSiteLookupId != null ? f.HomeSiteLookupId : f.SiteLookupId;  // lookup column
       if (lid != null) hs = sitesMap.byId[String(lid)] || '';
     }
-    return hs;
+    const ch = parseFloat(f.ContractHours);
+    return { homeSite: hs, contractHours: ch > 0 ? ch : 0 };
   }
-  return '';
+  return none;
 }
+async function getHomeSite(token, email, sitesMap) { return (await getWorkerInfo(token, email, sitesMap)).homeSite; }
 
 // Optional "Days" column on Allowances (multi-choice Monday..Sunday) → weekday
 // indexes (0 = Sunday). Blank → null = every day. Accepts an array or "Sat, Sun".
@@ -167,7 +172,9 @@ function allowedOnDate(daysMap, title, date) {
 // Shift/allowance names compared loosely: "On Call", "on-call" and "Oncall" all match.
 const shiftKey = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-// All active allowances grouped by site name → { daily:[], weekly:[], days:{}, shiftMap:{}, shiftNames:[], weeklyShiftMap:{} }.
+// All active allowances grouped by site name → { daily:[], weekly:[], perJob:[], days:{}, shiftMap:{}, shiftNames:[], weeklyShiftMap:{} }.
+// perJob = allowances with Frequency "Per job" (e.g. Call-out, Call-out – on site): ticked
+// against a single work-order line rather than the day or the week.
 // weeklyShiftMap = { shiftKey(label): weekly allowance title } — a Teams shift with one of
 // these names is an ALLOWANCE (e.g. On call), not the shift worked. Labels = the
 // allowance's title plus anything in its ShiftName column.
@@ -189,9 +196,11 @@ async function getAllowancesBySite(token, sitesMap) {
     const siteName = f.SiteLookupId != null ? sitesMap.byId[String(f.SiteLookupId)] : '';
     const title = String(f.Title || '').trim();
     if (!siteName || !title) continue;
-    const bucket = (out[siteName] = out[siteName] || { daily: [], weekly: [], days: {}, shiftMap: {}, shiftNames: [], weeklyShiftMap: {} });
+    const bucket = (out[siteName] = out[siteName] || { daily: [], weekly: [], perJob: [], days: {}, shiftMap: {}, shiftNames: [], weeklyShiftMap: {} });
     const labels = String(f.ShiftName || '').split(/[,;]/).map(x => x.trim()).filter(Boolean);
-    if (String(f.Frequency || 'Daily').trim().toLowerCase() === 'weekly') {
+    const freq = String(f.Frequency || 'Daily').trim().toLowerCase();
+    if (/job/.test(freq)) { if (!bucket.perJob.includes(title)) bucket.perJob.push(title); continue; }
+    if (freq === 'weekly') {
       if (!bucket.weekly.includes(title)) bucket.weekly.push(title);
       for (const lab of [...labels, title]) if (shiftKey(lab)) bucket.weeklyShiftMap[shiftKey(lab)] = title;
       continue;
@@ -208,7 +217,7 @@ async function getAllowancesBySite(token, sitesMap) {
   }
   for (const k in out) {
     for (const t of (anyDay[k] || [])) delete out[k].days[t];
-    out[k].daily.sort((a, b) => a.localeCompare(b)); out[k].weekly.sort((a, b) => a.localeCompare(b));
+    out[k].daily.sort((a, b) => a.localeCompare(b)); out[k].weekly.sort((a, b) => a.localeCompare(b)); out[k].perJob.sort((a, b) => a.localeCompare(b));
     out[k].shiftNames.sort((a, b) => a.localeCompare(b));
   }
   return out;
@@ -344,14 +353,15 @@ async function deleteItem(token, id) {
 // (and remembered in `state.missing` for the rest of the save). A Comment is never
 // lost silently: one refused for length (a single-line column holds 255) is
 // shortened, and any comment that can't be saved is counted in state.shortened /
-// state.dropped so the person is told.
-const OPTIONAL_GROUPS = [['ShiftWorked', 'RosteredShift'], ['Callout'], ['Comment']];
+// state.dropped so the person is told. Per-job allowances likewise (state.jobsDropped).
+const OPTIONAL_GROUPS = [['ShiftWorked', 'RosteredShift'], ['JobAllowances'], ['Comment']];
 async function createItemResilient(token, fields, state) {
   const missing = (state.missing = state.missing || new Set());
-  state.shortened = state.shortened || 0; state.dropped = state.dropped || 0;
+  state.shortened = state.shortened || 0; state.dropped = state.dropped || 0; state.jobsDropped = state.jobsDropped || 0;
   const f = { ...fields };
   for (const k of missing) delete f[k];
   if (fields.Comment && !('Comment' in f)) state.dropped++;
+  if (fields.JobAllowances && !('JobAllowances' in f)) state.jobsDropped++;
   let shortened = false;
   for (;;) {
     try { const id = await createItem(token, f); if (shortened) state.shortened++; return id; }
@@ -365,6 +375,7 @@ async function createItemResilient(token, fields, state) {
       if (!group) throw e;
       for (const k of group) { delete f[k]; if (named) missing.add(k); }   // only a column SharePoint says is missing is skipped for later rows
       if (group.includes('Comment') && fields.Comment) { state.dropped++; shortened = false; }
+      if (group.includes('JobAllowances') && fields.JobAllowances) state.jobsDropped++;
     }
   }
 }
@@ -393,6 +404,8 @@ exports.shiftKey = shiftKey;
 exports.pool = pool;
 exports.getSitesMap = getSitesMap;
 exports.getHomeSite = getHomeSite;
+exports.getWorkerInfo = getWorkerInfo;
+exports.findList = findList;
 exports.getAllowancesBySite = getAllowancesBySite;
 exports.allowedOnDate = allowedOnDate;
 exports.getWorkOrders = getWorkOrders;

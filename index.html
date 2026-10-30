@@ -75,8 +75,11 @@
   .msel-btn.empty{color:var(--muted);}
   .msel-panel{margin-top:4px;border:1px solid var(--line);border-radius:8px;padding:2px 10px;background:var(--card);}
   .msel-note{font-size:11px;color:var(--muted);margin-top:4px;}
-  .co{display:inline-flex;align-items:center;gap:7px;font-size:13px;margin-top:7px;color:var(--ink);cursor:pointer;}
+  .jobs{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:7px;}
+  .co{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--ink);cursor:pointer;}
   .co input{width:17px;height:17px;margin:0;}
+  .phol{background:#fff6e0;border:1px solid #f1d58a;color:#7a5600;border-radius:9px;padding:7px 10px;margin-bottom:9px;font-size:13px;font-weight:600;}
+  .overnote{font-size:12.5px;font-weight:600;color:var(--amber);text-align:right;margin:0 2px 6px;}
   .shift{background:#f3f7fc;border:1px solid #d6e4f5;border-radius:9px;padding:8px 10px;margin-bottom:9px;font-size:13px;}
   .shift .ros{color:var(--ink);} .shift .ros b{color:var(--brand-dark);}
   .shift .fixed{font-size:10.5px;color:var(--muted);}
@@ -113,6 +116,7 @@
     <div class="weekhead" id="weekHead"></div>
     <div id="days"><div class="loading">Loading your week…</div></div>
     <div class="totbar"><span>Week total</span><b id="weekTotal">0.0 h</b></div>
+    <div class="overnote" id="overNote"></div>
     <input class="hp" tabindex="-1" autocomplete="off" id="company">
     <button type="button" class="btn" id="submit" onclick="submitWeek()">Save week</button>
     <div class="foot" id="closeFoot" style="text-align:center;color:var(--muted);font-size:11px;margin-top:12px">You can change this week's hours until it closes.</div>
@@ -127,6 +131,7 @@
 <script>
 let WORKORDERS = [];   // per-site, loaded from the WorkOrders SharePoint list on each week load
 let msalInstance=null, account=null, WEEK=null, SITES=[], ALLOWANCES_BY_SITE={}, WEEKLY_OPTIONS=[], WEEK_ALLOWANCES=[], userName='there', userEmail='';
+let HOLIDAYS={}, CONTRACT_HRS=0;   // {site:{date:name}} public holidays; weekly contract hours (Workers.ContractHours, 0 = not set)
 let ROSTER_SITES=[], ROSTER_ERRORS=[], ROSTER_ERR_DETAIL={}, ROSTER_SHIFT_NAMES={}, ROSTER_WEEK_ALLOW=[];   // sites linked to Teams Shifts; any whose roster couldn't be read
 const SCOPES=['openid','profile','email'];
 
@@ -224,18 +229,20 @@ async function loadWeek(){
     WORKORDERS=data.workOrders||[];
     WEEKLY_OPTIONS=data.weeklyOptions||[];
     WEEK_ALLOWANCES=(data.weekAllowances||[]).slice();
+    HOLIDAYS=data.holidays||{}; CONTRACT_HRS=Number(data.contractHours)||0;
     ROSTER_SITES=data.rosterSites||[]; ROSTER_ERRORS=data.rosterErrors||[]; ROSTER_ERR_DETAIL=data.rosterErrorDetail||{}; ROSTER_SHIFT_NAMES=data.rosterShiftNames||{}; ROSTER_WEEK_ALLOW=(data.rosterWeekAllowances||[]).filter(a=>WEEKLY_OPTIONS.includes(a));
     if(!data.weekSaved) for(const a of ROSTER_WEEK_ALLOW) if(!WEEK_ALLOWANCES.includes(a)) WEEK_ALLOWANCES.push(a);   // rostered On call → ticked (until the week is saved)
     WEEK={ weekStart:data.weekStart, weekEnd:data.weekEnd, closeDayName:data.closeDayName, homeSite:data.homeSite||'',
       rejected:!!data.rejected, rejectionReason:data.rejectionReason||'',
       days:(data.days||[]).map(d=>({ date:d.date, site:d.site||data.homeSite||'',
-        lines:(d.lines||[]).map(l=>({wo:String(l.wo||''),hr:(l.hr!=null?String(l.hr):''),comment:String(l.comment||''),co:!!l.co})),
+        lines:(d.lines||[]).map(l=>({wo:String(l.wo||''),hr:(l.hr!=null?String(l.hr):''),comment:String(l.comment||''),jobs:(l.jobs||[]).slice()})),
         allowances:(d.allowances||[]).slice(),
         rostered:(d.rostered||[]), rosterAllow:(d.rosterAllowances||[]), shiftWorked:String(d.shiftWorked||'') })) };
     // Days not saved yet start from the week's (fixed) roster: its site, shift and matching allowances.
     // Saved days keep exactly what the person entered.
     (data.days||[]).forEach((d,di)=>{ const r=(d.rostered||[])[0]; if(d.saved || !r) return;
       const day=WEEK.days[di]; if(SITES.includes(r.site)) day.site=r.site; applyShift(day,'',r.name); });
+    (data.days||[]).forEach((d,di)=>{ if(!d.saved) applyHoliday(WEEK.days[di]); });   // public holiday → its allowance ticked
     restoreDraft();
     renderWeek();
     setCountdown(nextPayrollSend(WEEK.closeDayName));
@@ -257,8 +264,22 @@ function lineHtml(di,li,l){
     <input inputmode="text" placeholder="Comment / description (optional)…" value="${esc(l.comment||'')}"
       oninput="WEEK.days[${di}].lines[${li}].comment=this.value"
       style="width:100%;box-sizing:border-box;margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13.5px;font-family:inherit;">
-    <label class="co"><input type="checkbox" ${l.co?'checked':''} onchange="WEEK.days[${di}].lines[${li}].co=this.checked"> Call-out job</label></div>`;
+    ${jobsHtml(di,li,l)}</div>`;
 }
+// Per-job allowances (Allowances list, Frequency "Per job" — e.g. Call-out, Call-out – on site)
+// for the day's site: a tick for each, against this work order.
+function jobsHtml(di,li,l){
+  const opts=(ALLOWANCES_BY_SITE[WEEK.days[di].site]||{}).perJob||[];
+  l.jobs=(l.jobs||[]).filter(a=>opts.includes(a));
+  if(!opts.length) return '';
+  const q=a=>h(String(a).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
+  return `<div class="jobs">${opts.map(a=>`<label class="co"><input type="checkbox" ${l.jobs.includes(a)?'checked':''} onchange="toggleJob(${di},${li},'${q(a)}',this.checked)"> ${h(a)}</label>`).join('')}</div>`;
+}
+function toggleJob(di,li,name,on){ const arr=WEEK.days[di].lines[li].jobs=(WEEK.days[di].lines[li].jobs||[]); const i=arr.indexOf(name); if(on&&i<0)arr.push(name); else if(!on&&i>=0)arr.splice(i,1); }
+// Public holidays: the day's banner, and the site's "Public holiday" daily allowance (if it has one).
+function holidayName(d){ return (HOLIDAYS[d.site]||{})[d.date]||''; }
+function holidayAllowance(d){ return siteDailyOpts(d.site,d.date).find(a=>String(a).toLowerCase().replace(/[^a-z0-9]/g,'').includes('publicholiday'))||''; }
+function applyHoliday(d){ const a=holidayName(d)&&holidayAllowance(d); if(a && !(d.allowances||[]).includes(a)) (d.allowances=d.allowances||[]).push(a); }
 function renderWeek(){
   const rejectBanner = WEEK.rejected
     ? `<div style="background:#fdeceb;border:1px solid #f0a9a4;color:#8a1a14;border-radius:9px;padding:9px 12px;font-size:13px;font-weight:600;margin-bottom:10px">⚠️ This week was sent back${WEEK.rejectionReason?': “'+esc(WEEK.rejectionReason)+'”':''}. Please fix it and submit again.</div>`
@@ -274,6 +295,7 @@ function renderWeek(){
     const tot=d.lines.reduce((s,l)=>s+(parseFloat(l.hr)||0),0).toFixed(1);
     return `<div class="day">
       <div class="dayhd"><span class="dayname">${dayLabel(d.date)}</span><span class="daytot" id="dt${di}">${tot}h</span></div>
+      ${holidayName(d)?`<div class="phol">🎉 Public holiday — ${h(holidayName(d))}</div>`:''}
       ${shiftHtml(di,d)}
       <div id="dl${di}">${d.lines.map((l,li)=>lineHtml(di,li,l)).join('')}</div>
       <button type="button" class="addline" onclick="addLine(${di})">+ add work order and description</button>
@@ -285,7 +307,7 @@ function renderWeek(){
 }
 // daily allowances for a site on a given date (Allowances "Days" column limits some to certain weekdays; 0 = Sunday)
 function siteDailyOpts(site,date){ const sa=ALLOWANCES_BY_SITE[site]||{}, dm=sa.days||{}, wd=new Date(date+'T00:00:00Z').getUTCDay(); return (sa.daily||[]).filter(a=>!dm[a] || dm[a].includes(wd)); }
-function setDaySite(di,site){ WEEK.days[di].site=site; const ok=siteDailyOpts(site,WEEK.days[di].date); WEEK.days[di].allowances=(WEEK.days[di].allowances||[]).filter(a=>ok.includes(a)); renderWeek(); }
+function setDaySite(di,site){ WEEK.days[di].site=site; const ok=siteDailyOpts(site,WEEK.days[di].date); WEEK.days[di].allowances=(WEEK.days[di].allowances||[]).filter(a=>ok.includes(a)); applyHoliday(WEEK.days[di]); renderWeek(); }
 function allowHtml(di,d){
   const opts=siteDailyOpts(d.site,d.date);
   d.allowances=(d.allowances||[]).filter(a=>opts.includes(a));   // drop any ticked on a day it no longer applies
@@ -346,10 +368,15 @@ function weekAllowHtml(){
   return `<div class="day"><div class="allow-h" style="margin-bottom:6px">Weekly allowances</div>${mselHtml('w',WEEKLY_OPTIONS,WEEK_ALLOWANCES,'toggleWeekAllow(')}${fromRoster}</div>`;
 }
 function toggleWeekAllow(name,on){ const i=WEEK_ALLOWANCES.indexOf(name); if(on&&i<0)WEEK_ALLOWANCES.push(name); else if(!on&&i>=0)WEEK_ALLOWANCES.splice(i,1); }
-function addLine(di){ WEEK.days[di].lines.push({wo:'',hr:'',comment:''}); renderWeek(); }
+function addLine(di){ WEEK.days[di].lines.push({wo:'',hr:'',comment:'',jobs:[]}); renderWeek(); }
 function delLine(di,li){ WEEK.days[di].lines.splice(li,1); renderWeek(); }
 function dayTot(di){ const el=document.getElementById('dt'+di); if(el) el.textContent=WEEK.days[di].lines.reduce((s,l)=>s+(parseFloat(l.hr)||0),0).toFixed(1)+'h'; }
-function calcWeekTotal(){ let t=0; for(const d of WEEK.days) for(const l of d.lines) t+=parseFloat(l.hr)||0; document.getElementById('weekTotal').textContent=t.toFixed(1)+' h'; }
+function calcWeekTotal(){
+  let t=0; for(const d of WEEK.days) for(const l of d.lines) t+=parseFloat(l.hr)||0;
+  document.getElementById('weekTotal').textContent=t.toFixed(1)+' h'+(CONTRACT_HRS?` of ${CONTRACT_HRS} h`:'');
+  const over=CONTRACT_HRS?Math.round((t-CONTRACT_HRS)*100)/100:0;
+  document.getElementById('overNote').textContent=over>0?`⚠ ${over.toFixed(1)} h over your ${CONTRACT_HRS} h contract — your senior approver will need to OK the week.`:'';
+}
 function suggest(di,li,v){
   const box=document.getElementById('sg'+di+'_'+li); if(!box)return; v=(v||'').trim();
   let m=WORKORDERS.filter(w=>w.toLowerCase().includes(v.toLowerCase()));
@@ -374,16 +401,17 @@ function saveWarnings(data){
   const w=[];
   if(data.commentsShortened) w.push(`${data.commentsShortened} comment${data.commentsShortened===1?' was':'s were'} too long and cut to 255 characters`);
   if(data.commentsDropped) w.push(`${data.commentsDropped} comment${data.commentsDropped===1?'':'s'} couldn’t be saved`);
+  if(data.jobsDropped) w.push(`the call-out ticks on ${data.jobsDropped} line${data.jobsDropped===1?'':'s'} couldn’t be saved`);
   if(w.length) alert('Week saved, but '+w.join(' and ')+'. Please let your supervisor know.');
 }
 async function submitWeek(){
   const bad=incompleteLines();
   if(bad.length && !confirm('These lines are missing a work order or hours, so they — and their comments — won’t be saved:\n\n'+bad.join('\n')+'\n\nSave the rest anyway? (Cancel to go back and fix them.)')) return;
   const days=WEEK.days.map(d=>({ date:d.date, site:d.site,
-    lines:d.lines.filter(l=>l.wo.trim()&&parseFloat(l.hr)>0).map(l=>({wo:l.wo.trim(),hr:parseFloat(l.hr),comment:String(l.comment||'').trim().slice(0,500),co:!!l.co})),
+    lines:d.lines.filter(l=>l.wo.trim()&&parseFloat(l.hr)>0).map(l=>({wo:l.wo.trim(),hr:parseFloat(l.hr),comment:String(l.comment||'').trim().slice(0,500),jobs:(l.jobs||[]).slice()})),
     allowances:(d.allowances||[]), shiftWorked:d.shiftWorked||'' }))
     .filter(d=>d.site && (d.lines.length || d.allowances.length));
-  const noHours=days.filter(d=>!d.lines.length && d.allowances.length).map(d=>`${dayLabel(d.date)}: ${d.allowances.join(', ')}`);
+  const noHours=days.filter(d=>!d.lines.length && d.allowances.some(a=>a!==holidayAllowance(d))).map(d=>`${dayLabel(d.date)}: ${d.allowances.join(', ')}`);   // a public holiday on its own is fine
   if(noHours.length && !confirm('These days have allowances but no hours:\n\n'+noHours.join('\n')+'\n\nSubmit them anyway? (Cancel to go back and fix — e.g. untick if you didn’t work.)')) return;
   const btn=document.getElementById('submit'); btn.disabled=true; btn.textContent='Saving…';
   try{
@@ -428,7 +456,7 @@ function tickCountdown(){
 setInterval(tickCountdown,30000);
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='26.2';
+const APP_VERSION='27';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){

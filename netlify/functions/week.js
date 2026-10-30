@@ -2,8 +2,9 @@
 // The week is driven by their HOME site's close day (Workers list, by email).
 // Also returns each day's rostered shift (Teams Shifts, as captured at the start of the
 // week — see roster-snapshot.js) and what was saved: the shift they say they worked.
-const { getAppToken, validateStaffToken, getSitesMap, getHomeSite, getAllowancesBySite, weekContext, getUserEntries, getUserRows, getWorkOrders, getRejectedWeek } = require('./staff');
+const { getAppToken, validateStaffToken, getSitesMap, getWorkerInfo, getAllowancesBySite, weekContext, getUserEntries, getUserRows, getWorkOrders, getRejectedWeek, shiftKey } = require('./staff');
 const { getRoster, allowanceForShift } = require('./roster-snapshot');
+const { holidaysBySite } = require('./holidays');
 
 exports.handler = async (event) => {
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
@@ -15,9 +16,9 @@ exports.handler = async (event) => {
     const token = await getAppToken();
     const [sitesMap, rows] = await Promise.all([getSitesMap(token), getUserRows(token, user.id)]);
     const sites = sitesMap.active;
-    const [homeSite, allowancesBySite] = await Promise.all([
-      getHomeSite(token, user.email, sitesMap),
-      getAllowancesBySite(token, sitesMap),                                // {site:{daily,weekly}}
+    const [{ homeSite, contractHours }, allowancesBySite] = await Promise.all([
+      getWorkerInfo(token, user.email, sitesMap),                          // home site + weekly contract hours
+      getAllowancesBySite(token, sitesMap),                                // {site:{daily,weekly,perJob}}
     ]);
     const homeInfo = sitesMap.byName[String(homeSite || '').toLowerCase()] || {};
     const closeDayIdx = homeInfo.closeDayIndex || 0;
@@ -27,9 +28,10 @@ exports.handler = async (event) => {
     const weeklyOptions = ((allowancesBySite[homeSite] || {}).weekly) || []; // staff weekly = home site
     const weeklySet = new Set(weeklyOptions);
     const entries = await getUserEntries(token, user.id, active.weekStart, active.weekEnd, rows);
-    const [workOrders, roster] = await Promise.all([
+    const [workOrders, roster, holidays] = await Promise.all([
       getWorkOrders(token, homeInfo.id, homeSite),                         // typeahead for the home site
       getRoster(token, user.id, sitesMap, active.days),                    // fixed at the start of each week
+      holidaysBySite(token, sitesMap, active.weekStart, active.weekEnd).catch(() => ({})),   // {site:{date:name}}
     ]);
 
     // Split the roster: work shifts vs shifts that stand for a weekly allowance (On call).
@@ -63,7 +65,13 @@ exports.handler = async (event) => {
         if (weeklySet.has(a)) { if (!weekAllowances.includes(a)) weekAllowances.push(a); }
         else dd.allowances.push(a);
       } else {
-        dd.lines.push({ wo: String(f.WorkOrder || ''), hr: Number(f.Hours) || 0, comment: String(f.Comment || ''), co: f.Callout === true || /^(yes|true|1)$/i.test(String(f.Callout || '')) });
+        // Per-job allowances (JobAllowances). Rows saved before v27 have Callout = Yes instead.
+        let jobs = String(f.JobAllowances || '').split(/[;,]/).map(x => x.trim()).filter(Boolean);
+        if (!jobs.length && (f.Callout === true || /^(yes|true|1)$/i.test(String(f.Callout || '')))) {
+          const co = (((allowancesBySite[String(f.Site || '').trim()] || {}).perJob) || []).find(a => shiftKey(a) === 'callout');
+          jobs = [co || 'Call-out'];
+        }
+        dd.lines.push({ wo: String(f.WorkOrder || ''), hr: Number(f.Hours) || 0, comment: String(f.Comment || ''), jobs });
       }
     }
     const days = active.days.map(date => ({
@@ -78,7 +86,7 @@ exports.handler = async (event) => {
       rosterAllowances: allowRoster[date] || [],
     }));
 
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, name: user.name, homeSite, closeDayName: wk.closeDayName, weekStart: active.weekStart, weekEnd: active.weekEnd, sites, allowancesBySite, weeklyOptions, workOrders, weekAllowances, days, rosterSites: Object.values(sitesMap.byName).filter(x => x.shiftsTeamId).map(x => x.name), rosterErrors: roster.errors, rosterErrorDetail: roster.details || {}, rosterShiftNames, rosterWeekAllowances, weekSaved: entries.length > 0, rejected: !!rejected, rejectionReason: rejected ? rejected.reason : '' }) };
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, name: user.name, homeSite, contractHours, holidays, closeDayName: wk.closeDayName, weekStart: active.weekStart, weekEnd: active.weekEnd, sites, allowancesBySite, weeklyOptions, workOrders, weekAllowances, days, rosterSites: Object.values(sitesMap.byName).filter(x => x.shiftsTeamId).map(x => x.name), rosterErrors: roster.errors, rosterErrorDetail: roster.details || {}, rosterShiftNames, rosterWeekAllowances, weekSaved: entries.length > 0, rejected: !!rejected, rejectionReason: rejected ? rejected.reason : '' }) };
   } catch (err) {
     console.error(err);
     return { statusCode: 502, headers, body: '{"ok":false,"error":"server"}' };
