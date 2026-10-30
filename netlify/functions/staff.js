@@ -172,6 +172,17 @@ function allowedOnDate(daysMap, title, date) {
 // Shift/allowance names compared loosely: "On Call", "on-call" and "Oncall" all match.
 const shiftKey = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+// An Allowances row's Site: one lookup, several (Site column set to "Allow multiple
+// values" — Graph then returns [{LookupId, LookupValue}]), or blank = every site.
+// → { all: true } or { ids: ['3', ...] }.
+function allowanceSites(f) {
+  const ids = [];
+  const add = v => { if (v != null && v !== '') ids.push(String(v)); };
+  if (Array.isArray(f.SiteLookupId)) f.SiteLookupId.forEach(add); else add(f.SiteLookupId);
+  if (Array.isArray(f.Site)) f.Site.forEach(x => add(x && typeof x === 'object' ? x.LookupId : null));
+  return ids.length ? { ids: [...new Set(ids)] } : { all: true };
+}
+
 // All active allowances grouped by site name → { daily:[], weekly:[], perJob:[], days:{}, shiftMap:{}, shiftNames:[], weeklyShiftMap:{} }.
 // perJob = allowances with Frequency "Per job" (e.g. Call-out, Call-Out - Working Hours): ticked
 // against a single work-order line rather than the day or the week.
@@ -193,27 +204,30 @@ async function getAllowancesBySite(token, sitesMap) {
   for (const it of ((await r.json()).value || [])) {
     const f = it.fields || {};
     if (f.Active === false) continue;
-    const siteName = f.SiteLookupId != null ? sitesMap.byId[String(f.SiteLookupId)] : '';
     const title = String(f.Title || '').trim();
-    if (!siteName || !title) continue;
-    const bucket = (out[siteName] = out[siteName] || { daily: [], weekly: [], perJob: [], days: {}, shiftMap: {}, shiftNames: [], weeklyShiftMap: {} });
-    const labels = String(f.ShiftName || '').split(/[,;]/).map(x => x.trim()).filter(Boolean);
-    const freq = String(f.Frequency || 'Daily').trim().toLowerCase();
-    if (/job/.test(freq)) { if (!bucket.perJob.includes(title)) bucket.perJob.push(title); continue; }
-    if (freq === 'weekly') {
-      if (!bucket.weekly.includes(title)) bucket.weekly.push(title);
-      for (const lab of [...labels, title]) if (shiftKey(lab)) bucket.weeklyShiftMap[shiftKey(lab)] = title;
-      continue;
+    if (!title) continue;
+    const where = allowanceSites(f);
+    const siteNames = where.all ? sitesMap.active : where.ids.map(id => sitesMap.byId[id]).filter(Boolean);
+    for (const siteName of siteNames) {
+      const bucket = (out[siteName] = out[siteName] || { daily: [], weekly: [], perJob: [], days: {}, shiftMap: {}, shiftNames: [], weeklyShiftMap: {} });
+      const labels = String(f.ShiftName || '').split(/[,;]/).map(x => x.trim()).filter(Boolean);
+      const freq = String(f.Frequency || 'Daily').trim().toLowerCase();
+      if (/job/.test(freq)) { if (!bucket.perJob.includes(title)) bucket.perJob.push(title); continue; }
+      if (freq === 'weekly') {
+        if (!bucket.weekly.includes(title)) bucket.weekly.push(title);
+        for (const lab of [...labels, title]) if (shiftKey(lab)) bucket.weeklyShiftMap[shiftKey(lab)] = title;
+        continue;
+      }
+      if (!bucket.daily.includes(title)) bucket.daily.push(title);
+      for (const lab of labels) if (!bucket.shiftNames.includes(lab)) bucket.shiftNames.push(lab);
+      for (const lab of [...labels, title]) {
+        const k = lab.toLowerCase();
+        if (!(bucket.shiftMap[k] = bucket.shiftMap[k] || []).includes(title)) bucket.shiftMap[k].push(title);
+      }
+      const days = parseDays(f.Days);
+      if (!days) (anyDay[siteName] = anyDay[siteName] || new Set()).add(title);
+      else bucket.days[title] = [...new Set([...(bucket.days[title] || []), ...days])].sort();
     }
-    if (!bucket.daily.includes(title)) bucket.daily.push(title);
-    for (const lab of labels) if (!bucket.shiftNames.includes(lab)) bucket.shiftNames.push(lab);
-    for (const lab of [...labels, title]) {
-      const k = lab.toLowerCase();
-      if (!(bucket.shiftMap[k] = bucket.shiftMap[k] || []).includes(title)) bucket.shiftMap[k].push(title);
-    }
-    const days = parseDays(f.Days);
-    if (!days) (anyDay[siteName] = anyDay[siteName] || new Set()).add(title);
-    else bucket.days[title] = [...new Set([...(bucket.days[title] || []), ...days])].sort();
   }
   for (const k in out) {
     for (const t of (anyDay[k] || [])) delete out[k].days[t];
