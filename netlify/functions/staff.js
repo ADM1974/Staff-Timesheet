@@ -219,7 +219,8 @@ async function getAllowancesBySite(token, sitesMap) {
         continue;
       }
       if (!bucket.daily.includes(title)) bucket.daily.push(title);
-      for (const lab of labels) if (!bucket.shiftNames.includes(lab)) bucket.shiftNames.push(lab);
+      // "Shift worked" choices: the row's ShiftName labels, and its Title when that names a shift (e.g. "Night Shift")
+      for (const lab of [...labels, ...(/shift/i.test(title) ? [title] : [])]) if (!bucket.shiftNames.includes(lab)) bucket.shiftNames.push(lab);
       for (const lab of [...labels, title]) {
         const k = lab.toLowerCase();
         if (!(bucket.shiftMap[k] = bucket.shiftMap[k] || []).includes(title)) bucket.shiftMap[k].push(title);

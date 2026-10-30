@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#0f6cbd">
+<meta name="theme-color" content="#2958cc">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -13,7 +13,7 @@
 <title>Staff Timesheet</title>
 <style>
   :root{
-    --brand:#0f6cbd;--brand-dark:#0a4f8a;--bg:#eef1f5;--card:#ffffff;--ink:#1f2329;--muted:#6a7280;--line:#e3e7ec;
+    --brand:#2958cc;--brand-dark:#1d43a3;--bg:#eef1f5;--card:#ffffff;--ink:#1f2329;--muted:#6a7280;--line:#e3e7ec;
     --amber:#b86e00;--green:#0f7b3f;--red:#b3261e;
   }
   *{box-sizing:border-box;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;}
@@ -22,7 +22,8 @@
   html,body{margin:0;}
   body{background:var(--bg);color:var(--ink);display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;position:relative;}
   .appbar{background:var(--brand);color:#fff;padding:calc(env(safe-area-inset-top) + 16px) 16px 14px;display:flex;align-items:center;gap:10px;flex:0 0 auto;position:sticky;top:0;z-index:20;}
-  .appbar .ttl{font-size:16px;font-weight:600;flex:1;}
+  .appbar .brandlogo{height:15px;width:auto;flex:0 0 auto;display:block;}
+  .appbar .ttl{font-size:14px;font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:10px;border-left:1px solid rgba(255,255,255,.4);}
   .appbar .user{font-size:11px;background:rgba(255,255,255,.22);padding:4px 9px;border-radius:20px;cursor:pointer;}
   .body{flex:1 0 auto;padding:14px 14px calc(env(safe-area-inset-bottom) + 100px);max-width:560px;width:100%;margin:0 auto;}
   .body::-webkit-scrollbar{width:0;}
@@ -55,7 +56,7 @@
   .loading{text-align:center;color:var(--muted);font-size:14px;padding:30px 0;}
   .hp{position:absolute;left:-9999px;}
   .signin{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px 18px 22px;box-shadow:0 1px 2px rgba(16,24,40,.04);text-align:center;margin-top:30px;}
-  .signin .logo{width:64px;height:64px;border-radius:16px;margin:2px auto 14px;display:block;}
+  .signin .logo{width:230px;max-width:80%;height:auto;margin:4px auto 18px;display:block;}
   .signin h2{font-size:18px;font-weight:600;margin:0 0 6px;}
   .signin .ms{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:13px;margin-top:18px;background:#fff;border:1px solid #cdd3da;border-radius:8px;font-size:15px;font-weight:600;color:#1f2329;cursor:pointer;}
   .signin .ms:hover{background:#f4f7fb;}
@@ -91,6 +92,7 @@
 </head>
 <body>
   <div class="appbar">
+    <img class="brandlogo" src="icons/ael-logo-white.svg" alt="Airport Equipment">
     <span class="ttl">Staff Timesheet</span>
     <span class="user hidden" id="who" onclick="signOut()">Sign out</span>
   </div>
@@ -99,7 +101,7 @@
   <!-- ===== SIGN IN ===== -->
   <div class="body" id="gateBody">
     <div class="signin">
-      <img class="logo" src="icons/icon-192.png" alt="">
+      <img class="logo" src="icons/ael-logo.svg" alt="Airport Equipment">
       <h2>Staff timesheet</h2>
       <div class="meta">Sign in with your work account to log your hours.</div>
       <button class="ms" id="msBtn" onclick="signIn()">
@@ -455,7 +457,7 @@ function tickCountdown(){
 setInterval(tickCountdown,30000);
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='27.3';
+const APP_VERSION='27.4';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
