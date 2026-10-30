@@ -75,7 +75,7 @@
   .msel-btn.empty{color:var(--muted);}
   .msel-panel{margin-top:4px;border:1px solid var(--line);border-radius:8px;padding:2px 10px;background:var(--card);}
   .msel-note{font-size:11px;color:var(--muted);margin-top:4px;}
-  .jobs{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:7px;}
+  .jobs{margin-top:7px;}
   .co{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--ink);cursor:pointer;}
   .co input{width:17px;height:17px;margin:0;}
   .phol{background:#fff6e0;border:1px solid #f1d58a;color:#7a5600;border-radius:9px;padding:7px 10px;margin-bottom:9px;font-size:13px;font-weight:600;}
@@ -267,13 +267,12 @@ function lineHtml(di,li,l){
     ${jobsHtml(di,li,l)}</div>`;
 }
 // Per-job allowances (Allowances list, Frequency "Per job" — e.g. Call-out, Call-Out - Working Hours)
-// for the day's site: a tick for each, against this work order.
+// for the day's site: a multi-select dropdown against this work order.
 function jobsHtml(di,li,l){
   const opts=(ALLOWANCES_BY_SITE[WEEK.days[di].site]||{}).perJob||[];
   l.jobs=(l.jobs||[]).filter(a=>opts.includes(a));
   if(!opts.length) return '';
-  const q=a=>h(String(a).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
-  return `<div class="jobs">${opts.map(a=>`<label class="co"><input type="checkbox" ${l.jobs.includes(a)?'checked':''} onchange="toggleJob(${di},${li},'${q(a)}',this.checked)"> ${h(a)}</label>`).join('')}</div>`;
+  return `<div class="jobs">${mselHtml('j'+di+'_'+li,opts,l.jobs,`toggleJob(${di},${li},`)}</div>`;
 }
 function toggleJob(di,li,name,on){ const arr=WEEK.days[di].lines[li].jobs=(WEEK.days[di].lines[li].jobs||[]); const i=arr.indexOf(name); if(on&&i<0)arr.push(name); else if(!on&&i>=0)arr.splice(i,1); }
 // Public holidays: the day's banner, and the site's "Public holiday" daily allowance (if it has one).
@@ -456,7 +455,7 @@ function tickCountdown(){
 setInterval(tickCountdown,30000);
 
 /* Version badge (shown on every screen) + always-check-for-updates on load */
-const APP_VERSION='27.2';
+const APP_VERSION='27.3';
 document.getElementById('verbadge').textContent='v'+APP_VERSION;
 document.getElementById('signinVer').textContent='Version '+APP_VERSION;
 if('serviceWorker' in navigator && location.hostname!=='localhost' && location.hostname!=='127.0.0.1'){
