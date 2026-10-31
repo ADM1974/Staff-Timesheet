@@ -106,7 +106,7 @@
           const d=await call({action:'preview',...f});
           const box=$('lvSum'); if(!box) return;
           if(d.error){ box.innerHTML=`<div class="err">${H(d.error)}</div>`; return; }
-          const ev=$('lvEvBox'); if(ev){ ev.hidden=!d.evidence; if(d.evidence) $('lvEvWhy').textContent=`Needed because it’s ${d.evidence}. You can also add it later.`; }
+          const ev=$('lvEvBox'); if(ev){ ev.hidden=!d.evidence; if(d.evidence) $('lvEvWhy').textContent=`Needed — ${d.evidence}. You can also add it later.`; }
           box.innerHTML=`<div class="sum"><b>${d.days} working day${d.days===1?'':'s'}</b>${opts.hours&&d.hours?` · <b>${d.hours} h</b>`:''}</div>`
             +(d.skipped||[]).map(x=>`<div class="meta">🎉 ${H(x)}</div>`).join('')
             +(d.rules&&d.rules.length?`<div class="warn">⚠ ${d.rules.map(H).join('<br>⚠ ')}<br>You can still send it — it will also need the senior approver.</div>`:'')
