@@ -64,7 +64,7 @@
       const reqs=(S.requests||[]).map(r=>{
         const [cls,txt]=CHIP[r.status]||['c-off',r.status];
         const canCancel=['Pending','Supervisor OK'].includes(r.status)||(['Approved','Acknowledged'].includes(r.status)&&r.start>S.today);
-        const needEv=typeOf(r.type).needsAttachment&&!r.hasEvidence&&!['Declined','Cancelled'].includes(r.status);
+        const needEv=r.needsEvidence&&!['Declined','Cancelled'].includes(r.status);
         return `<div class="req"><div class="top"><div><div class="ty">${H(r.type)}</div><div class="dt">${range(r)} · ${r.days} day${r.days===1?'':'s'}${opts.hours&&r.hours?` · ${r.hours} h`:''}</div></div><span class="chip ${cls}">${H(txt)}</span></div>
           ${r.status==='Pending'||r.status==='Supervisor OK'?(r.rules||[]).map(x=>`<div class="rl">⚠ ${H(x)}</div>`).join(''):''}
           ${needEv?`<div class="rl">📎 Certificate or stat dec still needed</div>`:''}
@@ -77,7 +77,7 @@
           <div class="row2 fld"><div><label>From</label><input type="date" id="lvStart"></div><div><label>To</label><input type="date" id="lvEnd"></div></div>
           ${opts.hours?`<div class="fld" id="lvHrsBox" hidden><label>Hours (leave blank for a full day)</label><input type="number" id="lvHours" min="0.5" max="24" step="0.5" inputmode="decimal" placeholder="${H(S.hoursPerDay)}"></div>`:''}
           <div class="fld"><label>Note for your supervisor (optional)</label><textarea id="lvNote" maxlength="1000"></textarea></div>
-          <div class="fld" id="lvEvBox" hidden><label>Medical certificate or statutory declaration</label><input type="file" id="lvEv" accept="image/*,application/pdf"><div class="meta" style="margin-top:4px">You can also add it later.</div></div>
+          <div class="fld" id="lvEvBox" hidden><label>Medical certificate or statutory declaration</label><input type="file" id="lvEv" accept="image/*,application/pdf"><div class="meta" style="margin-top:4px" id="lvEvWhy">You can also add it later.</div></div>
           <div id="lvSum"></div>
           <button class="btn" id="lvSend">Send request</button>`:'<div class="empty">No leave types are set up for your site yet.</div>'}
         </div>
@@ -96,8 +96,8 @@
       return {type:$('lvType').value,start:$('lvStart').value,end:$('lvEnd').value||$('lvStart').value,hours:opts.hours&&$('lvHours')?$('lvHours').value:'',note:$('lvNote').value};
     }
     function onChange(){
-      const f=form(), t=typeOf(f.type), $=id=>el.querySelector('#'+id);
-      $('lvEvBox').hidden=!t.needsAttachment;
+      const f=form(), $=id=>el.querySelector('#'+id);
+      $('lvEvBox').hidden=true;   // shown when the preview says a certificate is needed
       if($('lvHrsBox')) $('lvHrsBox').hidden=!(f.start&&f.start===f.end);
       clearTimeout(timer);
       if(!f.type||!f.start){ $('lvSum').innerHTML=''; return; }
@@ -106,6 +106,7 @@
           const d=await call({action:'preview',...f});
           const box=$('lvSum'); if(!box) return;
           if(d.error){ box.innerHTML=`<div class="err">${H(d.error)}</div>`; return; }
+          const ev=$('lvEvBox'); if(ev){ ev.hidden=!d.evidence; if(d.evidence) $('lvEvWhy').textContent=`Needed because it’s ${d.evidence}. You can also add it later.`; }
           box.innerHTML=`<div class="sum"><b>${d.days} working day${d.days===1?'':'s'}</b>${opts.hours&&d.hours?` · <b>${d.hours} h</b>`:''}</div>`
             +(d.skipped||[]).map(x=>`<div class="meta">🎉 ${H(x)}</div>`).join('')
             +(d.rules&&d.rules.length?`<div class="warn">⚠ ${d.rules.map(H).join('<br>⚠ ')}<br>You can still send it — it will also need the senior approver.</div>`:'')

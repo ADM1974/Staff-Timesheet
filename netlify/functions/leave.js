@@ -13,7 +13,7 @@ const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store
 const reply = (code, obj) => ({ statusCode: code, headers, body: JSON.stringify(obj) });
 
 // What the person sees of their own request.
-const mine = r => ({ id: r.id, type: r.type, start: r.start, end: r.end, hours: r.hours, days: L.daysOf(r).length, status: r.status, rules: r.rules, note: r.note, hasEvidence: !!r.evidenceUrl });
+const mine = r => ({ id: r.id, type: r.type, start: r.start, end: r.end, hours: r.hours, days: L.daysOf(r).length, status: r.status, rules: r.rules, note: r.note, hasEvidence: !!r.evidenceUrl, needsEvidence: L.needsEvidence(r) });
 
 exports.handler = async (event) => {
   const user = await validateStaffToken(event.headers && (event.headers.authorization || event.headers.Authorization));
@@ -59,7 +59,8 @@ exports.handler = async (event) => {
       if (L.datesBetween(start, end).length > 180) return { error: 'That’s more than 6 months — split it into separate requests.' };
       if (start < today && !type.allowPast) return { error: `${type.title} can’t be backdated — pick today or later.` };
       const sm = sitesMap.byName[site.toLowerCase()];
-      const hols = sm ? await holidaysForSite(token, sm, start, end).catch(() => ({})) : {};
+      // a day either side too, for the "next to a public holiday" certificate rule
+      const hols = sm ? await holidaysForSite(token, sm, L.isoOf(L.msOf(start) - 86400000), L.isoOf(L.msOf(end) + 86400000)).catch(() => ({})) : {};
       const days = L.workingDays(start, end, hols);
       if (!days.length) return { error: 'Those dates are all weekends or public holidays.' };
       const clash = own.find(r => L.ACTIVE.includes(r.status) && L.daysOf(r).some(d => days.includes(d)));
@@ -71,13 +72,13 @@ exports.handler = async (event) => {
       const others = L.othersOff(requests, site, days, '', email);
       const rules = L.evaluateRules({ type, start, days, today, site, siteMax: siteInfo.max || 0, others });
       const skipped = Object.entries(hols).filter(([d]) => d >= start && d <= end).map(([d, n]) => `${L.fmtDay(d)} is ${n} — not counted`);
-      return { type, start, end, days, dayHours, hours: Math.round(per * days.length * 100) / 100, rules, skipped };
+      return { type, start, end, days, dayHours, hours: Math.round(per * days.length * 100) / 100, rules, skipped, evidence: L.evidenceReason(type, days, hols) };
     };
 
     if (action === 'preview') {
       const p = await plan();
       if (p.error) return reply(200, { ok: true, error: p.error });
-      return reply(200, { ok: true, days: p.days.length, hours: p.hours, rules: p.rules, skipped: p.skipped, entitlement: p.type.entitlement });
+      return reply(200, { ok: true, days: p.days.length, hours: p.hours, rules: p.rules, skipped: p.skipped, entitlement: p.type.entitlement, evidence: p.evidence });
     }
 
     if (action === 'submit') {
@@ -89,7 +90,8 @@ exports.handler = async (event) => {
         Title: user.name, Email: email, PersonType: 'Staff', PersonId: user.id, Site: site,
         LeaveType: p.type.title, StartDate: p.start, EndDate: p.end, Hours: p.hours, DayHours: JSON.stringify(p.dayHours),
         Note: String(data.note || '').trim().slice(0, 1000), Status: 'Pending', RulesBroken: p.rules.join('\n'),
-        History: L.stamp(user.name, 'Requested'), ...(evidenceUrl ? { EvidenceUrl: evidenceUrl } : {}),
+        History: L.stamp(user.name, 'Requested') + (p.evidence ? '\n' + L.stamp('', 'Certificate needed — ' + p.evidence) : ''),
+        ...(evidenceUrl ? { EvidenceUrl: evidenceUrl } : {}),
       });
       return reply(200, { ok: true, request: mine(r), rules: p.rules });
     }
